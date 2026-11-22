@@ -17,6 +17,7 @@ const MAX_BODY_BYTES = 100 * 1024;
 const MAX_PRODUCT_IDS = 100;
 const LINK_CACHE_TTL_MS = 10 * 60 * 1000;
 const LINK_CACHE_MAX = 200;
+const MODEL_RESERVE_MS = 5000;
 
 // ---------- 入参校验 ----------
 
@@ -126,10 +127,15 @@ function createHandler(overrides = {}) {
   const log = overrides.log || console.log;
   const linkCache = new Map();
 
-  async function getLinkInfo(hotLink) {
+  async function getLinkInfo(hotLink, deadlineMs) {
     const cached = linkCache.get(hotLink);
     if (cached && cached.expiresAt > Date.now()) return cached.info;
-    const info = await linkFetcher(hotLink, { timeoutMs: config.linkFetchTimeoutMs });
+    const info = await linkFetcher(hotLink, {
+      timeoutMs: config.linkFetchTimeoutMs,
+      scraper: config.scraper,
+      // 给后面的模型调用留出时间
+      scraperDeadlineMs: deadlineMs - MODEL_RESERVE_MS
+    });
     // 只缓存抓取成功的结果，失败的下次重新尝试
     if (info.fetched) {
       if (linkCache.size >= LINK_CACHE_MAX) linkCache.delete(linkCache.keys().next().value);
@@ -159,7 +165,7 @@ function createHandler(overrides = {}) {
     const { ids, products } = parseProductIds(body.productIds);
     const hotLink = parseHotLink(body.hotLink);
     const deadlineMs = startedAt + config.agentBudgetMs;
-    const linkInfo = await getLinkInfo(hotLink);
+    const linkInfo = await getLinkInfo(hotLink, deadlineMs);
     const { title, attempts } = await generateTitle(config, {
       products,
       linkInfo,
@@ -178,6 +184,7 @@ function createHandler(overrides = {}) {
         time: new Date().toISOString(),
         authRequired: config.authRequired,
         agentConfigured: Boolean(config.ark.apiKey && config.ark.model),
+        amazonDataServiceConfigured: Boolean(config.scraper.apiKey),
         productCount: CATALOG_SIZE
       })
     },

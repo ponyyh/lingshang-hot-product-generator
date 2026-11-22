@@ -1,4 +1,5 @@
 // 抓取爆款链接的公开页面信息（标题、描述、关键词），作为 Agent 生成标题的参考。
+// 亚马逊商品页有专门的解析：商品标题、品牌、五点描述、规格表、类目。
 // 链接由用户输入，所以这里做了防 SSRF 处理：只允许 http/https 默认端口，
 // 解析出的 IP 不能是内网/本机/保留地址，重定向逐跳重新校验，并限制响应大小和耗时。
 
@@ -6,8 +7,11 @@ const dns = require("node:dns");
 const http = require("node:http");
 const https = require("node:https");
 const net = require("node:net");
+const zlib = require("node:zlib");
 
 const MAX_BYTES = 256 * 1024;
+// 亚马逊商品页约 1MB，标题、五点描述等信息在几十万字节之后，需要读得更多
+const AMAZON_MAX_BYTES = 1536 * 1024;
 const MAX_REDIRECTS = 3;
 const USER_AGENT =
   "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/130.0.0.0 Safari/537.36";
@@ -66,7 +70,41 @@ function assertAllowedUrl(url) {
   if (/^(localhost|.*\.local|.*\.internal)$/i.test(host)) throw new Error("目标地址不允许访问");
 }
 
-function requestOnce(url, deadlineMs) {
+// 和真实浏览器打开页面时一致的请求头；电商站点对缺少这些头的请求更容易返回验证页
+const BROWSER_HEADERS = {
+  "User-Agent": USER_AGENT,
+  Accept: "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,*/*;q=0.8",
+  "Accept-Language": "zh-CN,zh;q=0.9,en;q=0.6",
+  "Accept-Encoding": "gzip, deflate, br",
+  "Upgrade-Insecure-Requests": "1",
+  "Sec-Fetch-Dest": "document",
+  "Sec-Fetch-Mode": "navigate",
+  "Sec-Fetch-Site": "none",
+  "Sec-Fetch-User": "?1",
+  "sec-ch-ua": '"Chromium";v="130", "Google Chrome";v="130", "Not?A_Brand";v="99"',
+  "sec-ch-ua-mobile": "?0",
+  "sec-ch-ua-platform": '"macOS"'
+};
+
+// 解压响应体；读取被截断时也尽量解出已收到的部分
+function decompress(body, encoding) {
+  const options = { finishFlush: zlib.constants.Z_SYNC_FLUSH, maxOutputLength: 8 * 1024 * 1024 };
+  try {
+    if (/\bgzip\b/i.test(encoding)) return zlib.gunzipSync(body, options);
+    if (/\bdeflate\b/i.test(encoding)) return zlib.inflateSync(body, options);
+    if (/\bbr\b/i.test(encoding)) {
+      return zlib.brotliDecompressSync(body, {
+        finishFlush: zlib.constants.BROTLI_OPERATION_FLUSH,
+        maxOutputLength: 8 * 1024 * 1024
+      });
+    }
+  } catch {
+    return Buffer.alloc(0);
+  }
+  return body;
+}
+
+function requestOnce(url, deadlineMs, maxBytes = MAX_BYTES) {
   return new Promise((resolve, reject) => {
     const remaining = deadlineMs - Date.now();
     if (remaining <= 0) return reject(new Error("抓取超时"));
@@ -76,12 +114,7 @@ function requestOnce(url, deadlineMs) {
       {
         method: "GET",
         lookup: guardedLookup,
-        headers: {
-          "User-Agent": USER_AGENT,
-          Accept: "text/html,application/xhtml+xml;q=0.9,*/*;q=0.5",
-          "Accept-Language": "zh-CN,zh;q=0.9,en;q=0.6",
-          "Accept-Encoding": "identity"
-        }
+        headers: BROWSER_HEADERS
       },
       (res) => {
         const chunks = [];
@@ -91,13 +124,13 @@ function requestOnce(url, deadlineMs) {
           resolve({
             status: res.statusCode || 0,
             headers: res.headers,
-            body: Buffer.concat(chunks)
+            body: decompress(Buffer.concat(chunks), String(res.headers["content-encoding"] || ""))
           });
         };
         res.on("data", (chunk) => {
           size += chunk.length;
           chunks.push(chunk);
-          if (size >= MAX_BYTES) {
+          if (size >= maxBytes) {
             res.destroy();
             finish();
           }
@@ -175,8 +208,78 @@ const PLATFORMS = [
   [/(^|\.)(pinduoduo|yangkeduo)\.com$/i, "拼多多"],
   [/(^|\.)(douyin|jinritemai)\.com$/i, "抖音电商"],
   [/(^|\.)1688\.com$/i, "1688"],
-  [/(^|\.)(xiaohongshu|xhslink)\.com$/i, "小红书"]
+  [/(^|\.)(xiaohongshu|xhslink)\.com$/i, "小红书"],
+  [/(^|\.)amazon\.(com|[a-z]{2}|com?\.[a-z]{2})$/i, "亚马逊"],
+  [/^(a\.co|amzn\.(to|asia|eu|com))$/i, "亚马逊"]
 ];
+
+function isAmazonHost(hostname) {
+  return detectPlatform(hostname) === "亚马逊";
+}
+
+// 从亚马逊链接里取出 10 位商品编号（ASIN），取不到返回空串
+function extractAsin(url) {
+  const match = /\/(?:dp|gp\/product|gp\/aw\/d|product-reviews)\/([A-Z0-9]{10})(?:[/?]|$)/i.exec(url.pathname);
+  return match ? match[1].toUpperCase() : "";
+}
+
+// 亚马逊商品链接常带很长的标题路径和追踪参数，统一成 /dp/ASIN 再请求，结果更稳定
+function canonicalAmazonUrl(url) {
+  const asin = extractAsin(url);
+  return asin ? new URL(`${url.protocol}//${url.hostname}/dp/${asin}`) : url;
+}
+
+function sectionAfter(html, marker, length) {
+  const index = html.indexOf(marker);
+  return index === -1 ? "" : html.slice(index, index + length);
+}
+
+// 解析亚马逊商品页：商品标题、品牌、五点描述、规格表、类目
+function parseAmazonHtml(html) {
+  const title = clean(/id="productTitle"[^>]*>([\s\S]*?)<\/span>/i.exec(html)?.[1], 300);
+
+  const bullets = [];
+  const bulletSection = sectionAfter(html, 'id="feature-bullets"', 12000);
+  for (const match of bulletSection.matchAll(/<span class="a-list-item[^"]*">([\s\S]*?)<\/span>/gi)) {
+    const text = clean(match[1], 220);
+    if (text && bullets.length < 6) bullets.push(text);
+  }
+
+  const attributes = [];
+  const overview = sectionAfter(html, 'id="productOverview_feature_div"', 8000);
+  for (const row of overview.matchAll(/<tr[^>]*>([\s\S]*?)<\/tr>/gi)) {
+    const cells = [...row[1].matchAll(/<td[^>]*>([\s\S]*?)<\/td>/gi)].map((cell) => clean(cell[1], 80));
+    if (cells.length >= 2 && cells[0] && cells[1] && attributes.length < 8) {
+      attributes.push({ name: cells[0], value: cells[1] });
+    }
+  }
+
+  const byline = clean(/id="bylineInfo"[^>]*>([\s\S]*?)<\/a>/i.exec(html)?.[1], 80);
+  const brand =
+    attributes.find((item) => /^(brand|品牌)/i.test(item.name))?.value ||
+    byline.replace(/^(visit the|brand:|访问|品牌[:：]?)\s*/i, "").replace(/\s*(store|品牌旗舰店|旗舰店|商店)$/i, "");
+
+  // 网页标题形如 "Amazon.com: 商品标题 : 类目"，最后一段是类目
+  const pageTitle = clean(/<title[^>]*>([\s\S]*?)<\/title>/i.exec(html)?.[1], 500);
+  const titleParts = pageTitle.split(/\s[:：]\s/);
+  // 部分站点（如英国站）的最后一段是 "Amazon.co.uk: 类目"，去掉站点名前缀
+  const category =
+    titleParts.length >= 2
+      ? clean(titleParts[titleParts.length - 1].replace(/^Amazon\.[a-z.]+\s*[:：]\s*/i, ""), 60)
+      : "";
+
+  return { title, brand: clean(brand, 60), bullets, attributes, category };
+}
+
+function isAmazonBlocked(res) {
+  if (res.status === 503 || res.status === 429 || res.status === 403) return true;
+  // 验证页很小；正常商品页有几十万字节，不必对整页做匹配
+  return res.body.length < 60000 && AMAZON_BLOCK_PATTERN.test(res.body.toString("latin1"));
+}
+
+// 亚马逊的反爬页面：机器人校验、验证码
+const AMAZON_BLOCK_PATTERN = /api-services-support@amazon\.com|\/errors\/validateCaptcha|Enter the characters you see below|Type the characters you see in this image|请输入您在下方看到的字符|opfcaptcha|Click the button below to continue shopping/i;
+
 
 function detectPlatform(hostname) {
   return PLATFORMS.find(([pattern]) => pattern.test(hostname))?.[1] || "";
@@ -194,8 +297,41 @@ function describeFetchError(err) {
   return "网络连接失败";
 }
 
-// 不抛异常：抓不到时返回 fetched:false 和原因，由 Agent 仅凭商品信息生成
-async function fetchLinkInfo(hotLink, { timeoutMs = 3500 } = {}) {
+// 某个亚马逊站点直连被拦截后，这段时间内不再重复尝试直连，直接走商品数据服务
+const DIRECT_BLOCK_MEMO_MS = 10 * 60 * 1000;
+const directBlockedUntil = new Map();
+
+// 通过第三方商品数据服务（ScraperAPI）读取页面：它用自己的出口 IP 访问并处理验证页，返回页面原文。
+// 返回 { res } 或 { note }；note 是给用户看的失败原因，不包含密钥和上游详情。
+async function fetchViaScraper(target, scraper, deadlineLimitMs, requestImpl) {
+  const api = new URL(scraper.baseUrl);
+  api.searchParams.set("api_key", scraper.apiKey);
+  api.searchParams.set("url", target.href);
+  const deadlineMs = Math.min(Date.now() + scraper.timeoutMs, deadlineLimitMs || Infinity);
+  let res;
+  try {
+    assertAllowedUrl(api);
+    res = await requestImpl(api, deadlineMs, AMAZON_MAX_BYTES);
+  } catch (err) {
+    console.warn(`[link] 商品数据服务请求失败 target=${target.hostname} reason=${err.code || err.message}`);
+    return {
+      note: /超时/.test(String(err.message)) ? "商品数据服务读取超时，请稍后重试" : "商品数据服务连接失败，请稍后重试"
+    };
+  }
+  if (res.status === 404) return { res };
+  if (res.status >= 200 && res.status < 300) return { res };
+  console.warn(`[link] 商品数据服务返回 HTTP ${res.status} target=${target.hostname}`);
+  if (res.status === 401 || res.status === 403) return { note: "商品数据服务的密钥无效或额度不足，请联系后端同事" };
+  if (res.status === 429) return { note: "商品数据服务请求过于频繁，请稍后重试" };
+  return { note: `商品数据服务暂时不可用（HTTP ${res.status}），请稍后重试` };
+}
+
+// 不抛异常：抓不到时返回 fetched:false 和原因，由 Agent 仅凭商品信息生成。
+// scraper：{ apiKey, baseUrl, timeoutMs, always }，配置后亚马逊直连被拦截时改走商品数据服务。
+async function fetchLinkInfo(
+  hotLink,
+  { timeoutMs = 3500, scraper = null, scraperDeadlineMs = 0, requestImpl = requestOnce } = {}
+) {
   const info = {
     sourceUrl: hotLink,
     host: "",
@@ -212,13 +348,65 @@ async function fetchLinkInfo(hotLink, { timeoutMs = 3500 } = {}) {
     const originalPath = url.pathname;
     info.host = url.hostname;
     info.platform = detectPlatform(url.hostname);
+    if (isAmazonHost(url.hostname)) url = canonicalAmazonUrl(url);
     for (let hop = 0; ; hop++) {
       assertAllowedUrl(url);
-      const res = await requestOnce(url, deadlineMs);
+      const amazon = isAmazonHost(url.hostname);
+      const canUseScraper = amazon && Boolean(scraper?.apiKey);
+      const skipDirect =
+        canUseScraper && (scraper.always || (directBlockedUntil.get(url.hostname) || 0) > Date.now());
+      let res = skipDirect ? null : await requestImpl(url, deadlineMs, amazon ? AMAZON_MAX_BYTES : MAX_BYTES);
+      if (res && amazon && isAmazonBlocked(res)) {
+        directBlockedUntil.set(url.hostname, Date.now() + DIRECT_BLOCK_MEMO_MS);
+      }
+      if (canUseScraper && (!res || isAmazonBlocked(res))) {
+        const outcome = await fetchViaScraper(url, scraper, scraperDeadlineMs, requestImpl);
+        if (outcome.note) {
+          info.platform = "亚马逊";
+          info.note = outcome.note;
+          return info;
+        }
+        res = outcome.res;
+        info.source = "scraper";
+      }
       if ([301, 302, 303, 307, 308].includes(res.status) && res.headers.location) {
         if (hop >= MAX_REDIRECTS) throw new Error("重定向次数过多");
         url = new URL(res.headers.location, url);
+        // 短链接（a.co、amzn.to）跳转到商品页后，同样统一成 /dp/ASIN
+        if (isAmazonHost(url.hostname)) url = canonicalAmazonUrl(url);
         continue;
+      }
+      if (amazon) {
+        info.platform = "亚马逊";
+        if (res.status === 404) {
+          info.note = "亚马逊上找不到这个商品，请检查链接是否完整";
+          return info;
+        }
+        if (isAmazonBlocked(res)) {
+          console.warn(`[link] 亚马逊拒绝读取 host=${url.hostname} status=${res.status} bytes=${res.body.length}`);
+          info.note = "亚马逊暂时拒绝了读取请求（触发了访问验证），请稍后重试";
+          return info;
+        }
+        if (res.status < 200 || res.status >= 300) throw new Error(`页面返回 HTTP ${res.status}`);
+        const product = parseAmazonHtml(decodeBody(res.body, String(res.headers["content-type"] || "")));
+        if (!product.title) {
+          info.note = extractAsin(url)
+            ? "未能从亚马逊页面读取到商品标题"
+            : "这不是亚马逊商品详情页链接，请使用包含 /dp/ 的商品链接";
+          return info;
+        }
+        Object.assign(info, {
+          fetched: true,
+          asin: extractAsin(url),
+          pageTitle: product.title,
+          description: product.bullets.join("；").slice(0, 600),
+          keywords: product.attributes.map((item) => `${item.name}:${item.value}`).join("，").slice(0, 300),
+          brand: product.brand,
+          category: product.category,
+          bullets: product.bullets,
+          attributes: product.attributes
+        });
+        return info;
       }
       if (res.status < 200 || res.status >= 300) throw new Error(`页面返回 HTTP ${res.status}`);
       const contentType = String(res.headers["content-type"] || "");
@@ -246,4 +434,12 @@ async function fetchLinkInfo(hotLink, { timeoutMs = 3500 } = {}) {
   }
 }
 
-module.exports = { fetchLinkInfo, parseHtml, isBlockedAddress, detectPlatform };
+module.exports = {
+  fetchLinkInfo,
+  parseHtml,
+  parseAmazonHtml,
+  extractAsin,
+  canonicalAmazonUrl,
+  isBlockedAddress,
+  detectPlatform
+};

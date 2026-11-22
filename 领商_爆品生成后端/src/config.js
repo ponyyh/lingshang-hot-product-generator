@@ -37,9 +37,18 @@ function loadConfig(env = process.env) {
       model: String(env.ARK_MODEL || ""),
       disableThinking: bool(env.ARK_DISABLE_THINKING, false)
     },
-    agentBudgetMs: int(env.AGENT_BUDGET_MS, 13000),
+    // 第三方商品数据服务（ScraperAPI）：亚马逊直连被拦截时用它读取商品页
+    scraper: {
+      apiKey: String(env.SCRAPER_API_KEY || ""),
+      baseUrl: String(env.SCRAPER_API_URL || "https://api.scraperapi.com/"),
+      timeoutMs: int(env.SCRAPER_TIMEOUT_MS, 20000),
+      always: bool(env.SCRAPER_ALWAYS, false)
+    },
+    // 走商品数据服务时一次读取可能要十几秒，所以总预算比前端 30 秒超时略短
+    agentBudgetMs: int(env.AGENT_BUDGET_MS, 27000),
     llmTimeoutMs: int(env.LLM_TIMEOUT_MS, 10000),
-    linkFetchTimeoutMs: int(env.LINK_FETCH_TIMEOUT_MS, 3500)
+    // 亚马逊商品页约 1MB，实测读取要 2 到 3 秒，留出余量
+    linkFetchTimeoutMs: int(env.LINK_FETCH_TIMEOUT_MS, 6000)
   };
 }
 

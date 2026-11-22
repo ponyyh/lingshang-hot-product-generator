@@ -280,7 +280,15 @@ function bindEvents() {
       }
 
       renderTitleState();
-      showToast("识别成功，已生成标题预览", "success");
+      // 告诉用户链接内容有没有真的读到：读不到时标题只是按关联商品生成的
+      const info = res.extractedInfo || {};
+      if (info.fetched === false) {
+        showToast(`${info.note || "未能读取链接内容"}，已仅按关联商品生成标题`, "info", 5000);
+      } else if (info.platform) {
+        showToast(`识别成功，已读取${info.platform}商品信息并生成标题`, "success");
+      } else {
+        showToast("识别成功，已生成标题预览", "success");
+      }
     } catch (err) {
       showToast(err.message || "爆款链接识别失败，请稍后重试", "error");
     } finally {

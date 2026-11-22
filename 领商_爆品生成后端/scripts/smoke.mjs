@@ -72,7 +72,7 @@ const rec = await call("POST", "/api/agent/hot-product/recognize", { token, body
 const recData = rec.json?.data || {};
 check("识别爆款链接（真实模型）", rec.json?.code === 0 && Boolean(recData.title), `${rec.ms}ms 链接已读取=${recData.extractedInfo?.fetched}`);
 console.log(`     标题：${recData.title || rec.json?.message}`);
-check("识别耗时在前端 15 秒超时内", rec.ms < 15000, `${rec.ms}ms`);
+check("识别耗时在前端 30 秒超时内", rec.ms < 30000, `${rec.ms}ms`);
 
 const regen = await call("POST", "/api/agent/hot-product/regenerate-title", {
   token,

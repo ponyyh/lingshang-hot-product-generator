@@ -23,7 +23,7 @@ async function call(method, path, { body, token, headers = {} } = {}) {
       ...headers
     },
     body: body !== undefined ? JSON.stringify(body) : undefined,
-    signal: AbortSignal.timeout(30000)
+    signal: AbortSignal.timeout(65000)
   });
   const type = res.headers.get("content-type") || "";
   const out = { status: res.status, headers: res.headers, ms: Date.now() - started };
@@ -72,7 +72,7 @@ const rec = await call("POST", "/api/agent/hot-product/recognize", { token, body
 const recData = rec.json?.data || {};
 check("识别爆款链接（真实模型）", rec.json?.code === 0 && Boolean(recData.title), `${rec.ms}ms 链接已读取=${recData.extractedInfo?.fetched}`);
 console.log(`     标题：${recData.title || rec.json?.message}`);
-check("识别耗时在前端 30 秒超时内", rec.ms < 30000, `${rec.ms}ms`);
+check("识别耗时在前端 60 秒超时内", rec.ms < 60000, `${rec.ms}ms`);
 
 const regen = await call("POST", "/api/agent/hot-product/regenerate-title", {
   token,

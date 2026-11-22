@@ -56,7 +56,8 @@ function buildMessages({ products, linkInfo, previousTitle, feedback }) {
             `爆款规格：${linkInfo.attributes.map((item) => `${item.name}=${item.value}`).join("；")}`,
           "爆款卖点：",
           ...linkInfo.bullets.map((bullet, index) => `${index + 1}. ${bullet}`),
-          "（爆款页面可能是外文，请提炼其中的材质、功能和卖点，用中文表达，不要直接照搬外文句子）"
+          "（爆款页面可能是外文，请提炼其中的材质、功能和卖点，用中文表达，不要直接照搬外文句子）",
+          "（爆款适配的机型与我们的商品不同：标题里的机型只能来自【关联商品】的适用机型，不要写爆款的机型）"
         ].filter(Boolean)
       : [
           linkInfo.platform && `平台：${linkInfo.platform}`,

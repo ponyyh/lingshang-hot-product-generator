@@ -10,8 +10,8 @@
     // 前端单独部署在别处时，把两个地址都改成后端的 HTTPS 地址。后端与 Agent 是同一个服务。
     BACKEND_BASE_URL: "",
     AGENT_BASE_URL: "",
-    // 亚马逊链接经商品数据服务读取时可能要十几秒
-    TIMEOUT_MS: 30000,
+    // 亚马逊链接经商品数据服务读取时可能要几十秒
+    TIMEOUT_MS: 60000,
     getAuthHeaders() {
       // 后端联调时可在此处注入登录态 Token，例如从 localStorage 读取
       const token = global.localStorage ? global.localStorage.getItem("lingshang_token") : "";

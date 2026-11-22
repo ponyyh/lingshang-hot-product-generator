@@ -9,13 +9,15 @@ const { AppError, CODES } = require("./errors");
 const { login, authenticate } = require("./auth");
 const { listProducts, getProductsByIds, CATALOG_SIZE } = require("./products");
 const { checkTitle } = require("./compliance");
-const { fetchLinkInfo } = require("./linkInfo");
+const { fetchLinkInfo, linkCacheKey } = require("./linkInfo");
 const { generateTitle, newTaskId, resolveTaskId } = require("./agent");
 const { buildCsv, EXPORT_FILENAME } = require("./exporter");
 
 const MAX_BODY_BYTES = 100 * 1024;
 const MAX_PRODUCT_IDS = 100;
 const LINK_CACHE_TTL_MS = 10 * 60 * 1000;
+// 经商品数据服务读到的结果缓存更久：每次读取都要花额度和十几秒，而商品卖点很少变
+const SCRAPER_CACHE_TTL_MS = 6 * 60 * 60 * 1000;
 const LINK_CACHE_MAX = 200;
 const MODEL_RESERVE_MS = 5000;
 
@@ -128,7 +130,9 @@ function createHandler(overrides = {}) {
   const linkCache = new Map();
 
   async function getLinkInfo(hotLink, deadlineMs) {
-    const cached = linkCache.get(hotLink);
+    // 同一个亚马逊商品的不同链接写法（带追踪参数等）共用一份缓存
+    const cacheKey = linkCacheKey(hotLink);
+    const cached = linkCache.get(cacheKey);
     if (cached && cached.expiresAt > Date.now()) return cached.info;
     const info = await linkFetcher(hotLink, {
       timeoutMs: config.linkFetchTimeoutMs,
@@ -139,7 +143,8 @@ function createHandler(overrides = {}) {
     // 只缓存抓取成功的结果，失败的下次重新尝试
     if (info.fetched) {
       if (linkCache.size >= LINK_CACHE_MAX) linkCache.delete(linkCache.keys().next().value);
-      linkCache.set(hotLink, { info, expiresAt: Date.now() + LINK_CACHE_TTL_MS });
+      const ttl = info.source === "scraper" ? SCRAPER_CACHE_TTL_MS : LINK_CACHE_TTL_MS;
+      linkCache.set(cacheKey, { info, expiresAt: Date.now() + ttl });
     }
     return info;
   }

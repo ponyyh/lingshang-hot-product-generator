@@ -20,5 +20,6 @@ fi
 cd "$DEPLOY_STAGE"
 vefaas deploy --region cn-guangzhou --yes
 
-# Keep the public gateway longer than the 150-second Dify budget.
-vefaas trigger apig update --id utmxknb9 --route-id rdc16k4saini45cedquu0 --gateway-id gdc16iqkaini45cedqut0 --timeout 180 --region cn-guangzhou --yes
+# Live APIG tests show Timeout is evaluated in milliseconds despite CLI seconds label.
+# 180000 ms exceeds the 150-second Dify budget.
+vefaas trigger apig update --id utmxknb9 --route-id rdc16k4saini45cedquu0 --gateway-id gdc16iqkaini45cedqut0 --timeout 180000 --region cn-guangzhou --yes

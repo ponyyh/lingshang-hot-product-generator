@@ -1,0 +1,40 @@
+{
+  "version": "2.0",
+  "region": "cn-guangzhou",
+  "project": {
+    "runtime": "native-node20/v1",
+    "region": "cn-guangzhou"
+  },
+  "modules": {
+    "active": "application",
+    "application": {
+      "region": "cn-guangzhou",
+      "id": "c7aa00c47e50",
+      "function_id": "utmxknb9",
+      "triggers": {
+        "type": "apig",
+        "system_url": "https://sc9oc2u4b15chepfhoq43.apigateway-cn-guangzhou.volceapi.com/",
+        "id": "gdc16iqkaini45cedqut0"
+      },
+      "runtime": "native-node20/v1"
+    },
+    "function": {
+      "runtime": "native-node20/v1",
+      "region": "cn-guangzhou"
+    },
+    "sandbox": {
+      "region": "cn-guangzhou"
+    }
+  },
+  "function": {
+    "id": "utmxknb9",
+    "runtime": "native-node20/v1",
+    "region": "cn-guangzhou",
+    "application_id": "c7aa00c47e50"
+  },
+  "triggers": {
+    "type": "apig",
+    "system_url": "https://sc9oc2u4b15chepfhoq43.apigateway-cn-guangzhou.volceapi.com/",
+    "id": "gdc16iqkaini45cedqut0"
+  }
+}

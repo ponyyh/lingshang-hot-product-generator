@@ -206,4 +206,4 @@ async function generateTitle(config, { products, linkInfo, previousTitle = "", d
   throw new AppError(CODES.TITLE_REJECTED, "AI 生成的标题未通过合规校验，请点击重新生成");
 }
 
-module.exports = { generateTitle, callModel, buildMessages, cleanTitle, stripWords, newTaskId, resolveTaskId };
+module.exports = { summarizeProducts, generateTitle, callModel, buildMessages, cleanTitle, stripWords, newTaskId, resolveTaskId };

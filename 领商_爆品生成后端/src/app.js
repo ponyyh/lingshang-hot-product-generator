@@ -10,6 +10,8 @@ const { login, authenticate } = require("./auth");
 const { listProducts, getProductsByIds, CATALOG_SIZE } = require("./products");
 const { checkTitle } = require("./compliance");
 const { fetchLinkInfo, linkCacheKey } = require("./linkInfo");
+const { validatePrefix, runDify } = require("./dify");
+const { parseShareInput } = require("./shareInput");
 const { generateTitle, newTaskId, resolveTaskId } = require("./agent");
 const { buildExport, EXPORT_FILENAME, EXPORT_CONTENT_TYPE } = require("./exporter");
 
@@ -42,7 +44,7 @@ function parseProductIds(value) {
 
 function parseHotLink(value) {
   if (typeof value !== "string" || !value.trim()) throw badRequest("请输入爆款链接");
-  const link = value.trim();
+  const link = parseShareInput(value).url;
   if (link.length > 2048) throw badRequest("爆款链接过长");
   let url;
   try {
@@ -128,6 +130,8 @@ function createHandler(overrides = {}) {
   const strictStatus = overrides.strictStatus ?? /^(1|true)$/i.test(process.env.STRICT_HTTP_STATUS || "");
   const log = overrides.log || console.log;
   const linkCache = new Map();
+  const rateWindows = new Map();
+  let activeAgentRequests = 0;
 
   async function getLinkInfo(hotLink, deadlineMs) {
     // 同一个亚马逊商品的不同链接写法（带追踪参数等）共用一份缓存
@@ -169,16 +173,23 @@ function createHandler(overrides = {}) {
   async function runAgent({ body, startedAt, previousTitle }) {
     const { ids, products } = parseProductIds(body.productIds);
     const hotLink = parseHotLink(body.hotLink);
-    const deadlineMs = startedAt + config.agentBudgetMs;
-    const linkInfo = await getLinkInfo(hotLink, deadlineMs);
-    const { title, attempts } = await generateTitle(config, {
-      products,
-      linkInfo,
-      previousTitle,
-      deadlineMs,
-      fetchImpl
-    });
-    return { ids, linkInfo, title, attempts };
+    const now = Date.now();
+    for (const [key, slot] of rateWindows) if (slot.until < now) rateWindows.delete(key);
+    const key = "global";
+    const slot = rateWindows.get(key) || { until: now + 60000, count: 0 };
+    if (slot.count >= 10 || activeAgentRequests >= 3) throw new AppError(CODES.RATE_LIMITED, "生成请求较多，请稍后重试");
+    slot.count += 1;
+    rateWindows.set(key, slot);
+    activeAgentRequests += 1;
+    try {
+    const source = parseShareInput(body.hotLink);
+    const result = await runDify(config, { products, hotLink, hotTitle: source.title,
+      previousTitle: previousTitle || "", fetchImpl });
+    return { ids, linkInfo: { sourceUrl: hotLink, keywords: result.keywords,
+      source: source.title ? "share-title" : "web-page", matchedCount: ids.length,
+      workflowRunId: result.workflowRunId }, title: result.title, attempts: 1 };
+    } finally { activeAgentRequests -= 1; }
+
   }
 
   const routes = {
@@ -188,7 +199,7 @@ function createHandler(overrides = {}) {
         status: "ok",
         time: new Date().toISOString(),
         authRequired: config.authRequired,
-        agentConfigured: Boolean(config.ark.apiKey && config.ark.model),
+        agentConfigured: Boolean(config.dify?.apiKey),
         amazonDataServiceConfigured: Boolean(config.scraper.apiKey),
         productCount: CATALOG_SIZE
       })
@@ -243,20 +254,20 @@ function createHandler(overrides = {}) {
     "POST /api/compliance/validate-title": {
       handler: async ({ req }) => {
         const body = await readJsonBody(req);
-        parseProductIds(body.productIds);
-        return checkTitle(parseTitle(body.title));
+        const { products } = parseProductIds(body.productIds);
+        try { validatePrefix(parseTitle(body.title), products); return { passed: true }; }
+        catch (err) { if (err instanceof AppError) return { passed: false, toastMsg: err.message, inlineMsg: err.message }; throw err; }
       }
     },
 
     "POST /api/hot-product/export": {
       handler: async ({ req, res, baseHeaders }) => {
         const body = await readJsonBody(req);
-        const { ids } = parseProductIds(body.productIds);
+        const { ids, products } = parseProductIds(body.productIds);
         const hotLink = parseHotLink(body.hotLink);
-        const title = parseTitle(body.title);
+        const title = validatePrefix(parseTitle(body.title), products);
         // 不信任前端已校验的结论，导出前在服务端再校验一次
-        const check = checkTitle(title);
-        if (!check.passed) throw new AppError(CODES.TITLE_REJECTED, check.inlineMsg);
+        // Prefix and per-SKU feature evidence already validated above.
 
         const file = buildExport({ productIds: ids, title, hotLink });
         res.writeHead(200, {

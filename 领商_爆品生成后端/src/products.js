@@ -33,6 +33,10 @@ function loadCatalog(file = path.join(__dirname, "data/products.json")) {
   const items = data.rows.map((row, index) => {
     const item = { id: index + 1 };
     for (const [field, column] of Object.entries(DISPLAY_FIELDS)) item[field] = cell(row, column);
+    // The picker and export use the same authoritative XLSX row.
+    item.name = item.title;
+    item.price = item.declaredPrice;
+    item.packaging = item.packagingShape;
     // 产品属性是 JSON：[{ propName, propValue }]，同名属性的多个值合并
     const attributes = new Map();
     try {
@@ -63,7 +67,7 @@ function listProducts({ keyword = "", page = 1, pageSize = 200 } = {}) {
   const kw = keyword.trim().toLowerCase();
   const searchable = ["title", "variantName", "color", "model", "skuCode"];
   const filtered = kw
-    ? CATALOG.items.filter(({ item }) => searchable.some((field) => item[field].toLowerCase().includes(kw)))
+    ? CATALOG.items.filter(({ item }) => searchable.some((field) => String(item[field]).toLowerCase().includes(kw)))
     : CATALOG.items;
   const start = (page - 1) * pageSize;
   return {
@@ -106,7 +110,7 @@ function exportRows(ids, { title, hotLink, now = new Date() }) {
   return ids
     .map((id) => BY_ID.get(id))
     .filter(Boolean)
-    .map((entry) => entry.row.map((value, index) => (overrides.has(index) ? overrides.get(index) : value)));
+    .map((entry) => entry.row.map((value, index) => (index === CATALOG.columnIndex.get(TITLE_COLUMN) ? `${title.trim()} ${value}` : overrides.has(index) ? overrides.get(index) : value)));
 }
 
 module.exports = {

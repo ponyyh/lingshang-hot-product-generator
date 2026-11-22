@@ -17,12 +17,13 @@ const FRONTEND_DIR = path.resolve(
   process.env.FRONTEND_DIR || (fs.existsSync(SIBLING_FRONTEND) ? SIBLING_FRONTEND : "./public")
 );
 // 只对外提供页面运行需要的文件，文档等其他文件不暴露
-const STATIC_FILES = new Set(["/index.html", "/styles.css", "/api.js", "/app.js"]);
+const STATIC_FILES = new Set(["/index.html", "/styles.css", "/api.js", "/app.js", "/login.html", "/login.css", "/login.js"]);
 const MIME = {
   ".html": "text/html; charset=utf-8",
   ".css": "text/css; charset=utf-8",
   ".js": "text/javascript; charset=utf-8",
   ".png": "image/png",
+  ".jpg": "image/jpeg",
   ".svg": "image/svg+xml"
 };
 
@@ -34,7 +35,7 @@ function serveStatic(req, res) {
     pathname = "";
   }
   if (pathname === "/") pathname = "/index.html";
-  const allowed = STATIC_FILES.has(pathname) || /^\/assets\/[\w.-]+\.(png|svg)$/.test(pathname);
+  const allowed = STATIC_FILES.has(pathname) || /^\/assets\/[\w.-]+\.(png|jpg|jpeg|svg)$/.test(pathname);
   const filePath = path.join(FRONTEND_DIR, pathname);
   if (!allowed || (req.method !== "GET" && req.method !== "HEAD") || !fs.existsSync(filePath)) {
     res.writeHead(404, { "Content-Type": "text/plain; charset=utf-8" });
@@ -51,13 +52,6 @@ function serveStatic(req, res) {
 }
 
 const overrides = {};
-if (process.env.ARK_LOCAL_ADDRESS && process.env.ARK_CONNECT_IP) {
-  overrides.fetchImpl = createDirectFetch({
-    localAddress: process.env.ARK_LOCAL_ADDRESS,
-    connectIp: process.env.ARK_CONNECT_IP
-  });
-  console.log(`模型请求经 ${process.env.ARK_LOCAL_ADDRESS} 直连，不走代理`);
-}
 const api = createHandler(overrides);
 
 const port = Number(process.env.PORT) || 8787;

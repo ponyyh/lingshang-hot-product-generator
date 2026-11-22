@@ -18,7 +18,11 @@ const state = {
   isTitleDirty: false,
   hasTitleError: false,
   tempModalSelectedIds: new Set(),
-  searchTimer: null
+  searchTimer: null,
+  autoRecognizeTimer: null,
+  isRecognizing: false,
+  lastRecognizedLink: "",
+  lastRecognizedProducts: ""
 };
 
 // ========== DOM 引用 ==========
@@ -27,7 +31,6 @@ const dom = {
   sidebar: document.getElementById("sidebar"),
   sidebarToggle: document.getElementById("sidebarToggle"),
   hotLinkInput: document.getElementById("hotLinkInput"),
-  recognizeBtn: document.getElementById("recognizeBtn"),
   selectProductsBtn: document.getElementById("selectProductsBtn"),
   selectedCountText: document.getElementById("selectedCountText"),
   productTableSection: document.getElementById("productTableSection"),
@@ -57,12 +60,16 @@ const dom = {
   modalSelectedCount: document.getElementById("modalSelectedCount")
 };
 
+function escapeHtml(value) {
+  return String(value ?? "").replace(/[&<>"']/g, c => ({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[c]));
+}
+
 // ========== Toast 提示工具 ==========
 function showToast(message, type = "info", duration = 2600) {
   const el = document.createElement("div");
   el.className = `toast-item toast-${type}`;
   const iconChar = type === "error" ? "!" : type === "success" ? "✓" : "i";
-  el.innerHTML = `<span class="toast-icon">${iconChar}</span><span>${message}</span>`;
+  el.innerHTML = `<span class="toast-icon">${iconChar}</span><span>${escapeHtml(message)}</span>`;
   dom.toastContainer.innerHTML = "";
   dom.toastContainer.appendChild(el);
 
@@ -72,9 +79,46 @@ function showToast(message, type = "info", duration = 2600) {
   }, duration);
 }
 
-// ========== 渲染：爆款链接与「识别」按钮（常驻显示） ==========
-function renderLinkState() {
-  dom.recognizeBtn.classList.remove("hidden");
+// ========== 自动识别：粘贴或输入有效爆款链接后自动调用 Agent 生成标题预览 ==========
+async function tryAutoRecognize(fromUserPasteOrInput = false) {
+  const val = dom.hotLinkInput.value.trim();
+  if (!val || !/https?:\/\/[^\s]+/i.test(val)) return;
+
+  if (state.selectedIds.length === 0) {
+    if (fromUserPasteOrInput) {
+      showToast("请先关联商品", "error");
+    }
+    return;
+  }
+
+  if (state.isRecognizing || (state.recognized && state.lastRecognizedLink === val && state.lastRecognizedProducts === state.selectedIds.join(","))) return;
+
+  const requestProducts = state.selectedIds.join(",");
+  state.isRecognizing = true;
+  showToast("正在识别爆款链接...", "info", 1500);
+  try {
+    const res = await API.recognizeHotProduct({
+      productIds: state.selectedIds,
+      hotLink: val
+    });
+    if (dom.hotLinkInput.value.trim() !== val || state.selectedIds.join(",") !== requestProducts) return;
+    state.currentTaskId = res.taskId || null;
+    state.recognized = true;
+    state.lastRecognizedLink = val;
+    state.lastRecognizedProducts = state.selectedIds.join(",");
+    state.isTitleDirty = true;
+    state.hasTitleError = false;
+    if (res.title) {
+      dom.titlePreviewInput.value = res.title;
+    }
+    renderTitleState();
+    showToast("已自动识别并生成标题预览", "success");
+  } catch (err) {
+    showToast(err.message || "爆款链接识别失败，请稍后重试", "error");
+  } finally {
+    state.isRecognizing = false;
+    if (dom.hotLinkInput.value.trim() !== val || state.selectedIds.join(",") !== requestProducts) tryAutoRecognize(false);
+  }
 }
 
 // ========== 渲染：标题预览、字数统计与校验提示 ==========
@@ -87,27 +131,6 @@ function renderTitleState() {
 
   // AI 重新生成提示条：点击「识别」生成标题后显示
   dom.aiRegenerateBar.classList.toggle("hidden", !state.recognized);
-}
-
-// ========== 商品行的单元格（字段与商品表一致） ==========
-function escapeHtml(value) {
-  return String(value ?? "").replace(/[&<>"']/g, (ch) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" })[ch]);
-}
-
-function productCells(item) {
-  // 预览图只接受 http/https 地址
-  const image = /^https?:\/\//i.test(item.previewImage || "")
-    ? `<img class="product-thumb" src="${escapeHtml(item.previewImage)}" alt="" loading="lazy" referrerpolicy="no-referrer">`
-    : "";
-  return `
-        <td class="col-thumb">${image}</td>
-        <td class="col-title" title="${escapeHtml(item.title)}">${escapeHtml(item.title)}</td>
-        <td>${escapeHtml(item.variantName)}</td>
-        <td class="col-sku">${escapeHtml(item.skuCode)}</td>
-        <td>${escapeHtml(item.declaredPrice)}</td>
-        <td>${escapeHtml(item.weight)}</td>
-        <td>${escapeHtml(item.packagingShape)}</td>
-        <td>${escapeHtml(item.packagingType)}</td>`;
 }
 
 // ========== 获取已选商品对象列表 ==========
@@ -147,7 +170,11 @@ function renderProductTable() {
             state.checkedRowIds.has(item.id) ? "checked" : ""
           }>
         </td>
-        ${productCells(item)}
+        <td>${escapeHtml(item.name)}</td>
+        <td>${escapeHtml(item.color)}</td>
+        <td>${escapeHtml(item.weight)}</td>
+        <td>${escapeHtml(item.price)}</td>
+        <td>${escapeHtml(item.packaging)}</td>
       </tr>
     `
     )
@@ -183,28 +210,14 @@ function renderProductTable() {
 }
 
 // ========== 弹窗商品数据拉取与渲染 ==========
-function renderModalPlaceholder(text) {
-  dom.modalProductList.innerHTML = `<tr><td colspan="9" style="text-align:center;padding:32px 0;color:#999;">${text}</td></tr>`;
-}
-
-let modalRequestSeq = 0;
-
 async function loadModalProducts(keyword = "") {
-  // 连续搜索时只采用最后一次请求的结果
-  const seq = ++modalRequestSeq;
-  renderModalPlaceholder("加载中...");
   try {
     const res = await API.fetchProducts({ keyword, page: 1, pageSize: 200 });
-    if (seq !== modalRequestSeq) return;
     const list = Array.isArray(res.list) ? res.list : [];
     state.modalFilteredList = list;
     list.forEach((item) => state.selectedProductMap.set(item.id, item));
     renderModalList();
   } catch (err) {
-    if (seq !== modalRequestSeq) return;
-    state.modalFilteredList = [];
-    renderModalList();
-    renderModalPlaceholder("商品列表加载失败，请关闭后重试");
     showToast(err.message || "商品列表加载失败，请稍后重试", "error");
   }
 }
@@ -222,13 +235,15 @@ function renderModalList() {
         <td class="col-check">
           <input type="checkbox" class="modal-row-check" data-id="${item.id}" ${isChecked ? "checked" : ""} ${isDisabled ? "disabled" : ""} ${isDisabled ? 'title="最多只能选择 100 件商品"' : ""}>
         </td>
-        ${productCells(item)}
+        <td>${escapeHtml(item.name)}</td>
+        <td>${escapeHtml(item.color)}</td>
+        <td>${escapeHtml(item.weight)}</td>
+        <td>${escapeHtml(item.price)}</td>
+        <td>${escapeHtml(item.packaging)}</td>
       </tr>
     `;
     })
     .join("");
-
-  if (filtered.length === 0) renderModalPlaceholder("暂无匹配的商品");
 
   dom.modalSelectedCount.textContent = state.tempModalSelectedIds.size;
   const modalCheckedCount = filtered.filter((item) => state.tempModalSelectedIds.has(item.id)).length;
@@ -250,69 +265,33 @@ function closeProductModal() {
 
 // ========== 事件绑定 ==========
 function bindEvents() {
-  // 1. 爆款链接输入监听
+  // 1. 爆款链接输入 / 粘贴监听：粘贴或输入有效链接后自动识别并生成标题预览
   dom.hotLinkInput.addEventListener("input", () => {
     state.hotLink = dom.hotLinkInput.value.trim();
-    renderLinkState();
+    if (state.hotLink !== state.lastRecognizedLink) {
+      state.recognized = false;
+      state.currentTaskId = null;
+      dom.titlePreviewInput.value = "";
+      renderTitleState();
+    }
+    if (!state.hotLink) {
+      state.recognized = false;
+      state.lastRecognizedLink = "";
+      renderTitleState();
+      return;
+    }
+    clearTimeout(state.autoRecognizeTimer);
+    state.autoRecognizeTimer = setTimeout(() => {
+      tryAutoRecognize(true);
+    }, 260);
   });
 
-  // 2. 点击「识别」按钮（调用 AI Agent 接口：POST /api/agent/hot-product/recognize）
-  dom.recognizeBtn.addEventListener("click", async () => {
-    if (state.selectedIds.length === 0) {
-      showToast("请先关联商品", "error");
-      return;
-    }
-
-    const val = dom.hotLinkInput.value.trim();
-    if (!val) {
-      showToast("请输入爆款链接", "error");
-      dom.hotLinkInput.focus();
-      return;
-    }
-    if (!/^https?:\/\/.+/i.test(val)) {
-      showToast("请输入以 http:// 或 https:// 开头的有效爆款链接", "error");
-      dom.hotLinkInput.focus();
-      return;
-    }
-
-    dom.recognizeBtn.disabled = true;
-    dom.recognizeBtn.querySelector(".btn-text").textContent = "识别中...";
-    // 亚马逊等链接读取较慢，超过 5 秒时告诉用户还在进行
-    const slowTimer = setTimeout(() => {
-      showToast("正在读取链接里的商品信息，最长约需 1 分钟，请稍候", "info", 8000);
-    }, 5000);
-
-    try {
-      const res = await API.recognizeHotProduct({
-        productIds: state.selectedIds,
-        hotLink: val
-      });
-      state.currentTaskId = res.taskId || null;
-      state.recognized = true;
-      state.isTitleDirty = true;
-      state.hasTitleError = false;
-
-      if (res.title) {
-        dom.titlePreviewInput.value = res.title;
-      }
-
-      renderTitleState();
-      // 告诉用户链接内容有没有真的读到：读不到时标题只是按关联商品生成的
-      const info = res.extractedInfo || {};
-      if (info.fetched === false) {
-        showToast(`${info.note || "未能读取链接内容"}，已仅按关联商品生成标题`, "info", 5000);
-      } else if (info.platform) {
-        showToast(`识别成功，已读取${info.platform}商品信息并生成标题`, "success");
-      } else {
-        showToast("识别成功，已生成标题预览", "success");
-      }
-    } catch (err) {
-      showToast(err.message || "爆款链接识别失败，请稍后重试", "error");
-    } finally {
-      clearTimeout(slowTimer);
-      dom.recognizeBtn.disabled = false;
-      dom.recognizeBtn.querySelector(".btn-text").textContent = "识别";
-    }
+  dom.hotLinkInput.addEventListener("paste", () => {
+    clearTimeout(state.autoRecognizeTimer);
+    state.autoRecognizeTimer = setTimeout(() => {
+      state.hotLink = dom.hotLinkInput.value.trim();
+      tryAutoRecognize(true);
+    }, 60);
   });
 
   // 3. 选择商品弹窗交互（调用后端商品列表接口：GET /api/products）
@@ -363,11 +342,18 @@ function bindEvents() {
   });
 
   dom.modalConfirmBtn.addEventListener("click", () => {
-    state.selectedIds = Array.from(state.tempModalSelectedIds).sort((a, b) => a - b);
+    const nextIds = Array.from(state.tempModalSelectedIds).sort((a, b) => a - b);
+    if (state.selectedIds.join(",") !== nextIds.join(",")) {
+      state.recognized = false;
+      state.currentTaskId = null;
+      dom.titlePreviewInput.value = "";
+    }
+    state.selectedIds = nextIds;
     state.currentPage = 1;
     closeProductModal();
     renderProductTable();
     renderTitleState();
+    tryAutoRecognize(false);
   });
 
   // 4. 主表格勾选与分页
@@ -462,8 +448,9 @@ function bindEvents() {
     }
   });
 
-  // 7. 底部「校验并下载」（调用合规校验接口 + 后端导出接口）
+  // 7. 底部「导出」（已移除标题合规校验逻辑，三项必填后直接调用后端导出接口下载）
   dom.submitDownloadBtn.addEventListener("click", async () => {
+    if (state.isRecognizing) { showToast("标题生成中，请稍候", "info"); return; }
     const link = dom.hotLinkInput.value.trim();
     const title = dom.titlePreviewInput.value.trim();
 
@@ -486,23 +473,9 @@ function bindEvents() {
 
     dom.submitDownloadBtn.disabled = true;
     try {
-      const checkResult = await API.validateTitle({
-        title,
-        productIds: state.selectedIds
-      });
-
-      if (!checkResult.passed) {
-        state.hasTitleError = true;
-        state.isTitleDirty = true;
-        dom.titleErrorMsg.textContent = checkResult.inlineMsg || "不符合平台规则，请重新生成或修改！";
-        renderTitleState();
-        showToast(checkResult.toastMsg || "下载失败", "error");
-        return;
-      }
-
       state.hasTitleError = false;
       renderTitleState();
-      showToast("校验通过，正在下载爆品方案...", "success");
+      showToast("正在导出爆品方案...", "success");
 
       await API.exportHotProduct({
         taskId: state.currentTaskId,
@@ -512,7 +485,7 @@ function bindEvents() {
         title
       });
     } catch (err) {
-      showToast(err.message || "校验或下载失败，请稍后重试", "error");
+      showToast(err.message || "导出失败，请稍后重试", "error");
     } finally {
       dom.submitDownloadBtn.disabled = false;
     }
@@ -523,6 +496,7 @@ function bindEvents() {
     state.hotLink = "";
     state.currentTaskId = null;
     state.recognized = false;
+    state.lastRecognizedLink = "";
     state.selectedIds = [];
     state.checkedRowIds.clear();
     state.currentPage = 1;
@@ -532,7 +506,6 @@ function bindEvents() {
     dom.hotLinkInput.value = "";
     dom.titlePreviewInput.value = "";
 
-    renderLinkState();
     renderProductTable();
     renderTitleState();
     showToast("已重置表单内容", "info", 1800);
@@ -566,18 +539,25 @@ function bindEvents() {
     });
   });
 
-  // 10. 顶部工具栏轻提示
+  // 10. 顶部工具栏轻提示 & 点击「运营小二」返回登录页切换账号
   document.querySelectorAll(".header-right .icon-btn[data-tip]").forEach((btn) => {
     btn.addEventListener("click", () => {
       showToast(btn.dataset.tip, "info", 2200);
     });
   });
+
+  const userMenuBtn = document.getElementById("userMenuBtn");
+  if (userMenuBtn) {
+    userMenuBtn.title = "点击返回登录页";
+    userMenuBtn.addEventListener("click", () => {
+      window.location.href = "./login.html";
+    });
+  }
 }
 
 // ========== 初始化 ==========
 function init() {
   bindEvents();
-  renderLinkState();
   renderProductTable();
   renderTitleState();
 }

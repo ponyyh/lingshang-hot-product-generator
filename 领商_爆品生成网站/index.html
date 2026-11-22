@@ -3,8 +3,8 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>领商 - 爆品生成</title>
-  <link rel="icon" type="image/svg+xml" href="./assets/logo.svg">
+  <title>深冬跨境 - 爆品生成</title>
+  <link rel="icon" type="image/png" href="./assets/brand-logo-icon.png?v=2">
   <link rel="stylesheet" href="./styles.css">
 </head>
 <body>
@@ -14,9 +14,9 @@
   <!-- 顶部导航栏 -->
   <header class="top-header">
     <div class="header-left">
-      <a href="javascript:void(0)" class="brand-logo" title="领商商家工作台">
-        <img src="./assets/logo.svg" alt="领商" class="brand-icon">
-        <span class="brand-name">领商</span>
+      <a href="javascript:void(0)" class="brand-logo" title="深冬跨境商家工作台">
+        <img src="./assets/brand-logo-full.png" alt="深冬跨境" class="brand-logo-full">
+        <img src="./assets/brand-logo-icon.png" alt="深冬跨境" class="brand-logo-icon">
       </a>
       <div class="global-search">
         <svg class="search-icon" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5">
@@ -48,12 +48,12 @@
           <path d="M3.5 5.5l6.5 5 6.5-5"/>
         </svg>
       </button>
-      <button class="icon-btn" title="开发者中心" data-tip="领商开放平台 API 状态正常">
+      <button class="icon-btn" title="开发者中心" data-tip="深冬跨境开放平台 API 状态正常">
         <svg viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.5">
           <path d="M7.5 15.8c-2.8.8-2.8-1.4-4-1.8m8 3.2v-2.4c0-.7-.2-1.3-.6-1.7 2-.2 4.1-1 4.1-4.5 0-1-.3-1.8-.9-2.4.1-.2.4-1.2-.1-2.4 0 0-.8-.2-2.5.9a8.5 8.5 0 0 0-4.6 0C5.2 3.6 4.4 3.8 4.4 3.8c-.5 1.2-.2 2.2-.1 2.4-.6.6-.9 1.4-.9 2.4 0 3.5 2.1 4.3 4.1 4.5-.4.4-.6 1-.6 1.7v2.4" stroke-linecap="round" stroke-linejoin="round"/>
         </svg>
       </button>
-      <button class="icon-btn" title="帮助中心" data-tip="提示：输入爆款链接并关联商品后，可一键校验并下载爆品方案">
+      <button class="icon-btn" title="帮助中心" data-tip="提示：关联商品并输入爆款链接后，可自动生成标题并一键导出爆品方案">
         <svg viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.5">
           <circle cx="10" cy="10" r="7.2"/>
           <path d="M8 7.8a2.1 2.1 0 0 1 3.9 1c0 1.4-1.9 1.6-1.9 2.9" stroke-linecap="round"/>
@@ -239,14 +239,11 @@
                             <th class="col-check">
                               <input type="checkbox" id="tableSelectAll" aria-label="全选当前页">
                             </th>
-                            <th>预览图</th>
-                            <th>产品标题</th>
-                            <th>变种名称</th>
-                            <th>SKU货号</th>
-                            <th>申报价格</th>
+                            <th>商品名称</th>
+                            <th>颜色</th>
                             <th>重量</th>
+                            <th>价格</th>
                             <th>外包装形状</th>
-                            <th>外包装类型</th>
                           </tr>
                         </thead>
                         <tbody id="productTableBody"></tbody>
@@ -294,21 +291,9 @@
                       type="text"
                       id="hotLinkInput"
                       class="text-input"
-                      placeholder="请输入爆款链接"
-                      list="sampleLinks"
+                      placeholder="粘贴商品链接或包含商品标题的完整分享文案"
                       autocomplete="off"
                     >
-                    <datalist id="sampleLinks">
-                      <option value="https://qn.taobao.com/home.htm/mkt-shop/match-buy/create/pc?isFullWidth=true">
-                    </datalist>
-                    <!-- 识别按钮常驻显示 -->
-                    <button type="button" id="recognizeBtn" class="btn-primary recognize-btn">
-                      <svg class="btn-icon eye-icon" viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round">
-                        <path d="M2.2 10C3.9 6.6 6.6 4.8 10 4.8s6.1 1.8 7.8 5.2c-1.7 3.4-4.4 5.2-7.8 5.2S3.9 13.4 2.2 10Z"/>
-                        <circle cx="10" cy="10" r="2.6"/>
-                      </svg>
-                      <span class="btn-text">识别</span>
-                    </button>
                   </div>
                 </div>
               </div>
@@ -357,7 +342,7 @@
 
         <!-- 底部操作栏 -->
         <div class="card-footer">
-          <button type="button" id="submitDownloadBtn" class="btn-primary btn-lg">校验并下载</button>
+          <button type="button" id="submitDownloadBtn" class="btn-primary btn-lg">导出</button>
           <button type="button" id="cancelBtn" class="btn-outline btn-lg">取消</button>
         </div>
       </section>
@@ -372,27 +357,31 @@
         <button type="button" id="closeModalBtn" class="modal-close" aria-label="关闭">&times;</button>
       </div>
       <div class="modal-toolbar">
-        <input type="text" id="modalSearchInput" class="text-input modal-search" placeholder="搜索产品标题、变种名称、SKU货号...">
+        <input type="text" id="modalSearchInput" class="text-input modal-search" placeholder="搜索商品名称、颜色...">
       </div>
       <div class="modal-body">
         <div class="table-wrapper">
-          <table class="data-table">
+          <table
+            id="relatedProductsPickerTable"
+            class="data-table"
+            data-testid="related-products-picker-table"
+          >
             <thead>
               <tr>
                 <th class="col-check">
                   <input type="checkbox" id="modalHeaderCheck" aria-label="全选">
                 </th>
-                <th>预览图</th>
-                <th>产品标题</th>
-                <th>变种名称</th>
-                <th>SKU货号</th>
-                <th>申报价格</th>
+                <th>商品名称</th>
+                <th>颜色</th>
                 <th>重量</th>
+                <th>价格</th>
                 <th>外包装形状</th>
-                <th>外包装类型</th>
               </tr>
             </thead>
-            <tbody id="modalProductList"></tbody>
+            <tbody
+              id="modalProductList"
+              data-testid="related-products-picker-tbody"
+            ></tbody>
           </table>
         </div>
       </div>

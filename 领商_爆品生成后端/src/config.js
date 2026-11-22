@@ -31,6 +31,11 @@ function loadConfig(env = process.env) {
     authSecret: String(env.AUTH_SECRET || ""),
     testAccounts: parseAccounts(env.TEST_ACCOUNTS),
     tokenTtlSec: int(env.TOKEN_TTL_SECONDS, 86400),
+    dify: {
+      baseUrl: String(env.DIFY_BASE_URL || "https://api.dify.ai/v1").replace(/\/$/, ""),
+      apiKey: String(env.DIFY_API_KEY || ""),
+      timeoutMs: int(env.DIFY_TIMEOUT_MS, 150000)
+    },
     ark: {
       baseUrl: String(env.ARK_BASE_URL || "https://ark.cn-beijing.volces.com/api/v3").replace(/\/$/, ""),
       apiKey: String(env.ARK_API_KEY || ""),

@@ -1,0 +1,354 @@
+/* ========== 深冬跨境 - 登录页样式（严格按 1440×900 1x 设计稿还原） ========== */
+:root {
+  --primary: #3A5DFF;
+  --primary-hover: #2C4EE8;
+  --text-main: #1F2329;
+  --text-secondary: #5C626E;
+  --text-muted: #C2C7D0;
+  --border-color: #E6E8EE;
+  --danger: #E34D59;
+  --success: #00A870;
+}
+
+* {
+  box-sizing: border-box;
+  margin: 0;
+  padding: 0;
+}
+
+html, body {
+  width: 100%;
+  height: 100%;
+  font-family: -apple-system, BlinkMacSystemFont, "PingFang SC", "Hiragino Sans GB", "Microsoft YaHei", "Helvetica Neue", Arial, sans-serif;
+  font-size: 14px;
+  color: var(--text-main);
+  background: #F9FAFE;
+  -webkit-font-smoothing: antialiased;
+  overflow: hidden;
+}
+
+button, input {
+  font-family: inherit;
+  font-size: inherit;
+  color: inherit;
+}
+
+button {
+  cursor: pointer;
+  border: none;
+  background: transparent;
+}
+
+.hidden {
+  display: none !important;
+}
+
+/* ========== 顶部浮动 Toast ========== */
+.toast-container {
+  position: fixed;
+  top: 32px;
+  left: 50%;
+  transform: translateX(-50%);
+  z-index: 2000;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 8px;
+  pointer-events: none;
+}
+
+.toast-item {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  background: #FFFFFF;
+  color: var(--text-main);
+  padding: 11px 20px;
+  border-radius: 8px;
+  box-shadow: 0 6px 24px rgba(15, 23, 42, 0.12);
+  font-size: 13.5px;
+  font-weight: 500;
+  pointer-events: auto;
+  animation: toastIn 0.2s ease-out;
+}
+
+.toast-item.toast-out {
+  opacity: 0;
+  transform: translateY(-6px);
+  transition: all 0.2s ease;
+}
+
+.toast-icon {
+  width: 17px;
+  height: 17px;
+  border-radius: 50%;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  color: #FFFFFF;
+  font-size: 11px;
+  font-weight: 700;
+  flex-shrink: 0;
+}
+
+.toast-error .toast-icon { background: var(--danger); }
+.toast-success .toast-icon { background: var(--success); }
+.toast-info .toast-icon { background: var(--primary); }
+
+@keyframes toastIn {
+  from { opacity: 0; transform: translateY(-8px); }
+  to { opacity: 1; transform: translateY(0); }
+}
+
+/* ========== 登录页全屏画布（浅色 3D 礼盒背景） ========== */
+.login-page {
+  position: relative;
+  width: 100vw;
+  height: 100vh;
+  background: #F9FAFE url("./assets/login-bg-giftbox.png?v=4") left center / cover no-repeat;
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  padding-right: clamp(48px, 8.33vw, 140px);
+}
+
+/* 左上角深冬跨境 Logo（1x 实测 left: 32px, top: 32px, height: 30px） */
+.login-brand {
+  position: fixed;
+  top: 32px;
+  left: 32px;
+  display: inline-flex;
+  align-items: center;
+  text-decoration: none;
+  z-index: 10;
+}
+
+.login-brand-img {
+  height: 30px;
+  width: auto;
+  display: block;
+  object-fit: contain;
+}
+
+/* ========== 右侧浮动登录卡片（1x 实测 416×394px, 内边距 40px） ========== */
+.login-card {
+  width: 416px;
+  min-height: 394px;
+  padding: 44px 40px 40px;
+  background: #FFFFFF;
+  border-radius: 12px;
+  box-shadow: 0 12px 42px rgba(24, 42, 96, 0.06), 0 2px 10px rgba(24, 42, 96, 0.03);
+  position: relative;
+  z-index: 5;
+}
+
+.login-title {
+  font-size: 20px;
+  font-weight: 500;
+  line-height: 28px;
+  color: var(--text-main);
+  margin-bottom: 30px;
+}
+
+/* 登录方式 Tabs */
+.login-tabs {
+  display: flex;
+  align-items: center;
+  gap: 24px;
+  margin-bottom: 30px;
+}
+
+.login-tab {
+  position: relative;
+  padding: 0 0 8px;
+  font-size: 14px;
+  line-height: 20px;
+  color: var(--text-main);
+  font-weight: 400;
+  border-bottom: 2px solid transparent;
+  transition: color 0.15s, border-color 0.15s;
+}
+
+.login-tab:hover {
+  color: var(--primary);
+}
+
+.login-tab.active {
+  color: var(--primary);
+  font-weight: 500;
+  border-bottom-color: var(--primary);
+}
+
+/* 表单输入组 */
+.login-form {
+  display: flex;
+  flex-direction: column;
+}
+
+.input-group {
+  position: relative;
+  margin-bottom: 16px;
+}
+
+.login-input {
+  width: 100%;
+  height: 40px;
+  padding: 0 14px;
+  border: 1px solid var(--border-color);
+  border-radius: 6px;
+  background: #FFFFFF;
+  font-size: 13.5px;
+  color: var(--text-main);
+  outline: none;
+  transition: border-color 0.15s, box-shadow 0.15s;
+}
+
+.login-input::placeholder {
+  color: var(--text-muted);
+}
+
+.login-input:focus {
+  border-color: var(--primary);
+  box-shadow: 0 0 0 2px rgba(58, 93, 255, 0.1);
+}
+
+.input-group.has-suffix .login-input {
+  padding-right: 40px;
+}
+
+/* 密码显示/隐藏切换按钮 */
+.pwd-toggle-btn {
+  position: absolute;
+  top: 50%;
+  right: 10px;
+  transform: translateY(-50%);
+  width: 26px;
+  height: 26px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  color: #8C93A0;
+  border-radius: 4px;
+  transition: color 0.15s;
+}
+
+.pwd-toggle-btn:hover {
+  color: var(--text-main);
+}
+
+.pwd-toggle-btn svg {
+  width: 16px;
+  height: 16px;
+}
+
+/* 手机号验证码行 */
+.code-row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
+.code-row .login-input {
+  flex: 1;
+  min-width: 0;
+}
+
+.sms-code-btn {
+  height: 40px;
+  min-width: 104px;
+  padding: 0 14px;
+  border: 1px solid var(--border-color);
+  border-radius: 6px;
+  background: #FFFFFF;
+  color: var(--text-muted);
+  font-size: 13px;
+  white-space: nowrap;
+  flex-shrink: 0;
+  transition: border-color 0.15s, color 0.15s;
+}
+
+.sms-code-btn.ready {
+  color: var(--primary);
+  border-color: #C7D4FF;
+}
+
+.sms-code-btn.ready:hover {
+  border-color: var(--primary);
+  background: #F4F7FF;
+}
+
+.sms-code-btn:disabled {
+  color: var(--text-muted);
+  border-color: var(--border-color);
+  background: #FAFAFC;
+  cursor: not-allowed;
+}
+
+/* 主登录按钮（1x 实测宽 336px, 高 40px, 主色 #3A5DFF） */
+.login-submit-btn {
+  margin-top: 8px;
+  width: 100%;
+  height: 40px;
+  border-radius: 6px;
+  background: var(--primary);
+  color: #FFFFFF;
+  font-size: 14px;
+  font-weight: 500;
+  transition: background 0.15s, opacity 0.15s;
+}
+
+.login-submit-btn:hover:not(:disabled) {
+  background: var(--primary-hover);
+}
+
+.login-submit-btn:disabled {
+  opacity: 0.7;
+  cursor: not-allowed;
+}
+
+/* 底部辅助链接行 */
+.login-footer-row {
+  margin-top: 16px;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  font-size: 12.5px;
+  line-height: 18px;
+}
+
+.footer-muted {
+  color: var(--text-muted);
+}
+
+.footer-link-primary {
+  color: var(--primary);
+  text-decoration: none;
+  margin-left: 2px;
+}
+
+.footer-link-primary:hover {
+  text-decoration: underline;
+}
+
+.footer-link-muted {
+  color: var(--text-muted);
+  text-decoration: none;
+  transition: color 0.15s;
+}
+
+.footer-link-muted:hover {
+  color: var(--text-secondary);
+}
+
+/* ========== 响应式小屏适配 ========== */
+@media (max-width: 960px) {
+  .login-page {
+    justify-content: center;
+    padding: 24px;
+    background-position: center;
+  }
+  .login-card {
+    width: 100%;
+    max-width: 416px;
+  }
+}

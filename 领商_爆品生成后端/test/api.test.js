@@ -233,3 +233,188 @@ test("链接抓取：拦截内网地址，解析网页信息，清洗模型输�
   assert.deepEqual(parsed, { pageTitle: "液态硅胶壳 & 防摔", description: "亲肤 手感", keywords: "" });
   assert.equal(cleanTitle('\n标题：「硅胶手机壳  适用 iPhone」\n以上是标题'), "硅胶手机壳 适用 iPhone");
 });
+
+// ---------- 亚马逊商品链接 ----------
+const fs = require("node:fs");
+const path = require("node:path");
+const { parseAmazonHtml, extractAsin, canonicalAmazonUrl, detectPlatform } = require("../src/linkInfo");
+const { buildMessages } = require("../src/agent");
+
+test("亚马逊：识别各站点域名和短链接，提取 ASIN 并统一成 /dp/ASIN", () => {
+  for (const host of ["www.amazon.com", "amazon.com", "www.amazon.co.uk", "www.amazon.de", "www.amazon.co.jp", "www.amazon.com.mx", "smile.amazon.com", "a.co", "amzn.to"]) {
+    assert.equal(detectPlatform(host), "亚马逊", host);
+  }
+  for (const host of ["amazon.com.evil.com", "notamazon.com", "amazon.example.org", "www.apple.com"]) {
+    assert.notEqual(detectPlatform(host), "亚马逊", host);
+  }
+  const asin = (link) => extractAsin(new URL(link));
+  assert.equal(asin("https://www.amazon.com/dp/B0CHX3QBCH"), "B0CHX3QBCH");
+  assert.equal(asin("https://www.amazon.com/Apple-iPhone-Case/dp/b0chx3qbch/ref=sr_1_3?keywords=case"), "B0CHX3QBCH");
+  assert.equal(asin("https://www.amazon.com/gp/product/B0CHX3QBCH?th=1"), "B0CHX3QBCH");
+  assert.equal(asin("https://www.amazon.com/gp/aw/d/B0CHX3QBCH"), "B0CHX3QBCH");
+  assert.equal(asin("https://www.amazon.com/s?k=iphone+case"), "");
+  assert.equal(asin("https://www.amazon.com/dp/SHORT"), "");
+  assert.equal(
+    canonicalAmazonUrl(new URL("https://www.amazon.co.uk/Some-Long-Title/dp/B0CHX3QBCH/ref=x?tag=abc&th=1")).href,
+    "https://www.amazon.co.uk/dp/B0CHX3QBCH"
+  );
+  assert.equal(canonicalAmazonUrl(new URL("https://www.amazon.com/s?k=case")).href, "https://www.amazon.com/s?k=case");
+});
+
+test("亚马逊：从商品页解析标题、品牌、五点描述、规格、类目", () => {
+  const html = fs.readFileSync(path.join(__dirname, "fixtures/amazon-product.html"), "utf8");
+  const product = parseAmazonHtml(html);
+  assert.equal(product.title, "Apple iPhone 15 Plus Clear Case with MagSafe");
+  assert.equal(product.brand, "Apple");
+  assert.equal(product.category, "Cell Phones & Accessories");
+  assert.equal(product.bullets.length, 4);
+  assert.match(product.bullets[0], /polycarbonate/);
+  assert.equal(product.bullets[3], "Compatible with iPhone 15 Plus");
+  assert.deepEqual(product.attributes.find((item) => item.name === "Material"), { name: "Material", value: "Polycarbonate" });
+  assert.ok(product.bullets.every((bullet) => !/[<>]/.test(bullet)));
+  // 不是商品页时什么都解析不出来，不能把别的内容当成商品标题
+  assert.deepEqual(parseAmazonHtml("<html><head><title>Amazon.com</title></head><body>home</body></html>"), {
+    title: "", brand: "", bullets: [], attributes: [], category: ""
+  });
+});
+
+test("亚马逊：商品卖点和规格进入提示词，并要求用中文提炼；extractedInfo 返回结构化信息", async () => {
+  const linkInfo = {
+    sourceUrl: "https://www.amazon.com/dp/B0CHX3QBCH", host: "www.amazon.com", platform: "亚马逊", fetched: true, note: "",
+    asin: "B0CHX3QBCH", pageTitle: "Apple iPhone 15 Plus Clear Case with MagSafe", brand: "Apple", category: "Cell Phones & Accessories",
+    description: "", keywords: "", bullets: ["Scratch-resistant coating", "Built-in magnets for MagSafe"],
+    attributes: [{ name: "Material", value: "Polycarbonate" }]
+  };
+  const prompt = buildMessages({ products: [{ name: "iPhone 18 Pro", color: "黑色", category: "手机壳" }], linkInfo })[1].content;
+  assert.match(prompt, /平台：亚马逊/);
+  assert.match(prompt, /爆款标题：Apple iPhone 15 Plus Clear Case with MagSafe/);
+  assert.match(prompt, /爆款规格：Material=Polycarbonate/);
+  assert.match(prompt, /1\. Scratch-resistant coating/);
+  assert.match(prompt, /2\. Built-in magnets for MagSafe/);
+  assert.match(prompt, /用中文表达/);
+
+  const calls = [];
+  const s = await start({ fetchImpl: modelFetch([GOOD], calls), linkFetcher: async () => linkInfo });
+  const token = await s.login();
+  const r = await s.call("POST", "/api/agent/hot-product/recognize", { token, body: { productIds: [3], hotLink: linkInfo.sourceUrl } });
+  assert.equal(r.json.code, 0);
+  assert.equal(r.json.data.extractedInfo.platform, "亚马逊");
+  assert.equal(r.json.data.extractedInfo.asin, "B0CHX3QBCH");
+  assert.equal(r.json.data.extractedInfo.bullets.length, 2);
+  assert.match(calls[0].body.messages[1].content, /Built-in magnets for MagSafe/);
+  await s.close();
+});
+
+// ---------- 亚马逊：直连被拦截时走商品数据服务 ----------
+const AMAZON_PAGE = fs.readFileSync(path.join(__dirname, "fixtures/amazon-product.html"));
+const BLOCK_PAGE = Buffer.from('<html><body><form action="/errors/validateCaptcha">Enter the characters you see below</form></body></html>');
+const page = (status, body = AMAZON_PAGE) => ({ status, headers: { "content-type": "text/html; charset=utf-8" }, body });
+const SCRAPER = { apiKey: "test-scraper-key", baseUrl: "https://api.scraperapi.com/", timeoutMs: 5000, always: false };
+
+// 模拟网络层：按请求的主机名返回预设响应，并记录请求过的地址
+function fakeRequest(handlers, seen = []) {
+  return async (url) => {
+    seen.push(url);
+    const reply = handlers[url.hostname];
+    if (reply instanceof Error) throw reply;
+    if (!reply) throw new Error("unexpected host " + url.hostname);
+    return typeof reply === "function" ? reply(url) : reply;
+  };
+}
+
+test("商品数据服务：直连被拦截时改走它，目标地址是统一后的 /dp/ASIN", async () => {
+  const seen = [];
+  const requestImpl = fakeRequest({ "www.amazon.ca": page(200, BLOCK_PAGE), "api.scraperapi.com": page(200) }, seen);
+  const info = await fetchLinkInfo("https://www.amazon.ca/Some-Title/dp/B0CHX3QBCH/ref=sr_1_1?tag=x", { scraper: SCRAPER, requestImpl });
+  assert.equal(info.fetched, true);
+  assert.equal(info.source, "scraper");
+  assert.equal(info.pageTitle, "Apple iPhone 15 Plus Clear Case with MagSafe");
+  assert.equal(info.bullets.length, 4);
+  assert.equal(seen.length, 2);
+  assert.equal(seen[1].hostname, "api.scraperapi.com");
+  assert.equal(seen[1].searchParams.get("url"), "https://www.amazon.ca/dp/B0CHX3QBCH");
+  assert.equal(seen[1].searchParams.get("api_key"), "test-scraper-key");
+  // 密钥不能出现在返回给前端的信息里
+  assert.ok(!JSON.stringify(info).includes("test-scraper-key"));
+
+  // 同一站点刚被拦截过：下一次不再重复直连，直接走商品数据服务
+  seen.length = 0;
+  const again = await fetchLinkInfo("https://www.amazon.ca/dp/B0CHX3QBCH", { scraper: SCRAPER, requestImpl });
+  assert.equal(again.fetched, true);
+  assert.deepEqual(seen.map((u) => u.hostname), ["api.scraperapi.com"]);
+});
+
+test("商品数据服务：直连成功时不调用；未配置密钥时保持原来的拦截提示", async () => {
+  let seen = [];
+  let info = await fetchLinkInfo("https://www.amazon.fr/dp/B0CHX3QBCH", { scraper: SCRAPER, requestImpl: fakeRequest({ "www.amazon.fr": page(200) }, seen) });
+  assert.equal(info.fetched, true);
+  assert.equal(info.source, undefined);
+  assert.deepEqual(seen.map((u) => u.hostname), ["www.amazon.fr"]);
+
+  seen = [];
+  info = await fetchLinkInfo("https://www.amazon.it/dp/B0CHX3QBCH", { scraper: { ...SCRAPER, apiKey: "" }, requestImpl: fakeRequest({ "www.amazon.it": page(503, BLOCK_PAGE) }, seen) });
+  assert.equal(info.fetched, false);
+  assert.match(info.note, /亚马逊暂时拒绝了读取请求/);
+  assert.equal(seen.length, 1);
+
+  // SCRAPER_ALWAYS：不先尝试直连
+  seen = [];
+  info = await fetchLinkInfo("https://www.amazon.es/dp/B0CHX3QBCH", { scraper: { ...SCRAPER, always: true }, requestImpl: fakeRequest({ "api.scraperapi.com": page(200) }, seen) });
+  assert.equal(info.fetched, true);
+  assert.deepEqual(seen.map((u) => u.hostname), ["api.scraperapi.com"]);
+
+  // 非亚马逊链接永远不走商品数据服务
+  seen = [];
+  info = await fetchLinkInfo("https://shop.example.com/item/1", { scraper: { ...SCRAPER, always: true }, requestImpl: fakeRequest({ "shop.example.com": page(200, Buffer.from("<title>某商品</title>")) }, seen) });
+  assert.equal(info.pageTitle, "某商品");
+  assert.deepEqual(seen.map((u) => u.hostname), ["shop.example.com"]);
+});
+
+test("商品数据服务：密钥无效、限流、超时、服务故障、商品不存在都有明确提示", async () => {
+  const run = async (host, reply) =>
+    fetchLinkInfo(`https://${host}/dp/B0CHX3QBCH`, { scraper: SCRAPER, requestImpl: fakeRequest({ [host]: page(503, BLOCK_PAGE), "api.scraperapi.com": reply }) });
+  const cases = [
+    ["www.amazon.nl", page(401, Buffer.from("Unauthorized request, please make sure your API key is valid.")), /密钥无效或额度不足/],
+    ["www.amazon.se", page(403, Buffer.from("You have exhausted the API Credits")), /密钥无效或额度不足/],
+    ["www.amazon.pl", page(429, Buffer.from("Too many requests")), /请求过于频繁/],
+    ["www.amazon.sg", page(500, Buffer.from("Request failed")), /暂时不可用（HTTP 500）/],
+    ["www.amazon.ae", new Error("抓取超时"), /读取超时/],
+    ["www.amazon.sa", Object.assign(new Error("socket hang up"), { code: "ECONNRESET" }), /连接失败/],
+    ["www.amazon.in", page(404, Buffer.from("Not found")), /找不到这个商品/],
+    ["www.amazon.com.au", page(200, BLOCK_PAGE), /亚马逊暂时拒绝了读取请求/]
+  ];
+  for (const [host, reply, expected] of cases) {
+    const info = await run(host, reply);
+    assert.equal(info.fetched, false, host);
+    assert.equal(info.platform, "亚马逊", host);
+    assert.match(info.note, expected, host);
+    assert.ok(!info.note.includes("test-scraper-key") && !/Unauthorized|exhausted|hang up/.test(info.note), host);
+  }
+});
+
+test("商品数据服务：接口把配置和剩余时间传给读取层；健康检查显示是否已配置", async () => {
+  let received;
+  const s = await start({
+    env: { SCRAPER_API_KEY: "test-scraper-key" },
+    linkFetcher: async (link, options) => {
+      received = options;
+      return { sourceUrl: link, host: "www.amazon.com", platform: "亚马逊", fetched: true, source: "scraper", pageTitle: "Case", description: "", keywords: "", note: "", bullets: ["A"], attributes: [] };
+    }
+  });
+  const token = await s.login();
+  const health = await s.call("GET", "/api/health");
+  assert.equal(health.json.data.amazonDataServiceConfigured, true);
+  assert.ok(!JSON.stringify(health.json).includes("test-scraper-key"));
+  const before = Date.now();
+  const r = await s.call("POST", "/api/agent/hot-product/recognize", { token, body: { productIds: [3], hotLink: "https://www.amazon.com/dp/B0CHX3QBCH" } });
+  assert.equal(r.json.data.extractedInfo.source, "scraper");
+  assert.equal(received.scraper.apiKey, "test-scraper-key");
+  // 留给商品数据服务的截止时间 = 总预算 27 秒 - 给模型预留的 5 秒
+  assert.ok(received.scraperDeadlineMs - before > 20000 && received.scraperDeadlineMs - before <= 22500);
+  assert.ok(!JSON.stringify(r.json).includes("test-scraper-key"));
+  await s.close();
+
+  const off = await start();
+  assert.equal((await off.call("GET", "/api/health")).json.data.amazonDataServiceConfigured, false);
+  await off.close();
+});

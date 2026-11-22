@@ -34,7 +34,7 @@ function serveStatic(req, res) {
   } catch {
     pathname = "";
   }
-  if (pathname === "/") pathname = "/index.html";
+  if (pathname === "/") pathname = "/login.html";
   const allowed = STATIC_FILES.has(pathname) || /^\/assets\/[\w.-]+\.(png|jpg|jpeg|svg)$/.test(pathname);
   const filePath = path.join(FRONTEND_DIR, pathname);
   if (!allowed || (req.method !== "GET" && req.method !== "HEAD") || !fs.existsSync(filePath)) {

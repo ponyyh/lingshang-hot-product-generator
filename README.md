@@ -3,7 +3,7 @@
 本目录是 GitHub 与火山引擎部署的唯一发布源。前端与后端同源部署。
 
 - 网站： https://sc9oc2u4b15chepfhoq43.apigateway-cn-guangzhou.volceapi.com/
-- 登录原型：同网站 `/login.html`。保留现有模拟账号/验证码交互，不连接真实认证或短信。
+- 网站默认入口 `/` 为登录页，模拟登录后跳转 `/index.html` 工作台。登录页也可通过 `/login.html` 打开。保留现有模拟账号/验证码交互，不连接真实认证或短信。
 - 云项目：default；区域：cn-guangzhou；函数：utmxknb9；应用：c7aa00c47e50。
 - Dify Workflow：f2845047-af9f-4642-a017-d9a25842a87b。
 - Dify API：`POST https://api.dify.ai/v1/workflows/run`，仅服务端调用。

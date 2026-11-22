@@ -1,11 +1,13 @@
 const test = require("node:test");
 const assert = require("node:assert/strict");
+const fs = require("node:fs");
 const http = require("node:http");
+const path = require("node:path");
 const { createHandler } = require("../src/app");
 const { loadConfig } = require("../src/config");
 const { isBlockedAddress, parseHtml, fetchLinkInfo } = require("../src/linkInfo");
 const { cleanTitle } = require("../src/agent");
-const { csvCell } = require("../src/exporter");
+const { readXlsx, buildXlsx } = require("../src/xlsx");
 
 const SECRET = "x".repeat(40);
 const GOOD = "液态硅胶波漾纹手机壳 适用iPhone 18 Pro 亲肤防滑全包镜头保护壳";
@@ -80,15 +82,24 @@ test("未配置 AUTH_SECRET 时拒绝服务而不是放行", async () => {
   await s.close();
 });
 
-test("商品列表：分页、搜索、空结果、非法参数", async () => {
+test("商品列表：字段与商品表一致，分页、搜索、空结果、非法参数", async () => {
   const s = await start(); const token = await s.login();
   const all = (await s.call("GET", "/api/products", { token })).json.data;
-  assert.equal(all.total, 200); assert.equal(all.list.length, 200);
-  assert.deepEqual(Object.keys(all.list[0]), ["id", "name", "color", "weight", "price", "packaging"]);
-  const page = (await s.call("GET", "/api/products?page=2&pageSize=10", { token })).json.data;
-  assert.equal(page.list[0].id, 11); assert.equal(page.list.length, 10);
-  const kw = (await s.call("GET", "/api/products?keyword=" + encodeURIComponent("樱花粉"), { token })).json.data;
-  assert.ok(kw.total > 0 && kw.list.every((p) => p.color === "樱花粉"));
+  assert.equal(all.total, 2); assert.equal(all.list.length, 2);
+  assert.deepEqual(Object.keys(all.list[0]), ["id", "title", "variantName", "color", "model", "skuCode", "declaredPrice", "weight", "packagingShape", "packagingType", "previewImage"]);
+  assert.deepEqual(
+    [all.list[0].title, all.list[0].variantName, all.list[0].skuCode, all.list[0].declaredPrice, all.list[0].weight, all.list[0].packagingShape, all.list[0].packagingType],
+    ["Phone Case for Samsung S26", "粉红色，Galaxy S26", "GDK-Galaxy S26-Pink-YXG134", "18.0", "42.0", "长方体", "软包装+软物"]
+  );
+  assert.match(all.list[1].previewImage, /^https:\/\/img\.cdnfe\.com\//);
+  // 内部用的属性、整行数据不对外返回
+  assert.ok(!("attributes" in all.list[0]) && !("row" in all.list[0]) && !("category" in all.list[0]));
+  const page = (await s.call("GET", "/api/products?page=2&pageSize=1", { token })).json.data;
+  assert.equal(page.list[0].id, 2); assert.equal(page.list.length, 1);
+  const kw = (await s.call("GET", "/api/products?keyword=" + encodeURIComponent("iphone 18"), { token })).json.data;
+  assert.deepEqual(kw.list.map((p) => p.id), [2]);
+  assert.deepEqual((await s.call("GET", "/api/products?keyword=YXG134", { token })).json.data.list.map((p) => p.id), [1]);
+  assert.deepEqual((await s.call("GET", "/api/products?keyword=" + encodeURIComponent("粉红色"), { token })).json.data.list.map((p) => p.id), [1]);
   const empty = (await s.call("GET", "/api/products?keyword=zzzz", { token })).json.data;
   assert.deepEqual([empty.total, empty.list], [0, []]);
   assert.equal((await s.call("GET", "/api/products?pageSize=0", { token })).json.code, 40001);
@@ -98,13 +109,18 @@ test("商品列表：分页、搜索、空结果、非法参数", async () => {
 
 test("识别：成功返回 taskId/title/extractedInfo，密钥只发给模型服务", async () => {
   const calls = []; const s = await start({ fetchImpl: modelFetch([`标题：“${GOOD}”\n说明：xxx`], calls) }); const token = await s.login();
-  const r = await s.call("POST", "/api/agent/hot-product/recognize", { token, body: { productIds: [1, 2, 2, 3], hotLink: "https://x.com/item" } });
+  const r = await s.call("POST", "/api/agent/hot-product/recognize", { token, body: { productIds: [1, 2, 2], hotLink: "https://x.com/item" } });
   assert.equal(r.json.code, 0);
   assert.match(r.json.data.taskId, /^task_\d{8}_[0-9a-f]{8}$/);
   assert.equal(r.json.data.title, GOOD);
-  assert.equal(r.json.data.extractedInfo.matchedCount, 3);
+  assert.equal(r.json.data.extractedInfo.matchedCount, 2);
   assert.equal(calls.length, 1); assert.equal(calls[0].auth, "Bearer k");
-  assert.match(calls[0].body.messages[1].content, /Samsung S26/);
+  assert.match(calls[0].body.messages[1].content, /适用机型：Galaxy S26、iPhone 18 Pro/);
+  assert.match(calls[0].body.messages[1].content, /颜色：粉红色、混合色1/);
+  // 商品表里的材质、工艺交给模型；「是否带支架=否」这类否定属性不交
+  assert.match(calls[0].body.messages[1].content, /主要材质=TPU\/PC/);
+  assert.match(calls[0].body.messages[1].content, /印花工艺=UV打印\/热转印/);
+  assert.ok(!calls[0].body.messages[1].content.includes("是否带支架"));
   assert.match(calls[0].body.messages[1].content, /爆款手机壳/);
   await s.close();
 });
@@ -180,21 +196,64 @@ test("标题校验：通过、敏感词、极限词、长度、绕过写法", as
   await s.close();
 });
 
-test("导出：返回带 BOM 的 CSV 文件；违规标题在服务端被拦截", async () => {
+test("导出：返回与商品表格式一致的 xlsx，只改产品标题、来源URL、更新时间三列", async () => {
   const s = await start(); const token = await s.login();
-  const ok = await s.call("POST", "/api/hot-product/export", { token, body: { taskId: "t", productIds: [1, 2], hotLink: "https://x.com/a?b=1,2", title: GOOD } });
+  const hotLink = "https://x.com/a?b=1,2&c=<3>";
+  const ok = await s.call("POST", "/api/hot-product/export", { token, body: { taskId: "t", productIds: [2, 1], hotLink, title: GOOD } });
   assert.equal(ok.status, 200);
-  assert.match(ok.headers.get("content-type"), /text\/csv/);
-  assert.match(ok.headers.get("content-disposition"), /filename\*=UTF-8''%E9%A2%86%E5%95%86/);
-  assert.deepEqual([...ok.buf.subarray(0, 3)], [0xef, 0xbb, 0xbf]);
-  const lines = ok.buf.toString("utf8").slice(1).trim().split("\r\n");
-  assert.equal(lines.length, 3);
-  assert.equal(lines[0], '"爆款链接","生成标题","商品名称","颜色","重量","价格","外包装形状"');
-  assert.ok(lines[1].startsWith('"https://x.com/a?b=1,2","' + GOOD + '","Samsung S26","黑色"'));
+  assert.equal(ok.headers.get("content-type"), "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet");
+  assert.equal(ok.headers.get("content-disposition"), 'attachment; filename="product_list.xlsx"');
+  assert.deepEqual([...ok.buf.subarray(0, 4)], [0x50, 0x4b, 0x03, 0x04]);
+
+  const { sheetName, rows } = readXlsx(ok.buf);
+  const source = JSON.parse(fs.readFileSync(path.join(__dirname, "../src/data/products.json"), "utf8"));
+  assert.equal(sheetName, "pddkj_product");
+  assert.equal(rows.length, 3);
+  assert.deepEqual(rows[0], source.columns);
+  assert.equal(rows[0].length, 69);
+  const col = (name) => rows[0].indexOf(name);
+  // 行的顺序与请求里的 productIds 一致
+  assert.equal(rows[1][col("SKU货号")], "FLJK-iPhone 18 Pro-White-YXFL031");
+  assert.equal(rows[2][col("SKU货号")], "GDK-Galaxy S26-Pink-YXG134");
+  for (const [exported, original] of [[rows[1], source.rows[1]], [rows[2], source.rows[0]]]) {
+    assert.equal(exported.length, 69);
+    assert.equal(exported[col("产品标题")], GOOD);
+    assert.equal(exported[col("来源URL")], hotLink);
+    assert.match(exported[col("更新时间")], /^\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}$/);
+    const changed = rows[0].filter((name, i) => exported[i] !== original[i]);
+    assert.deepEqual(changed, ["产品标题", "来源URL", "更新时间"]);
+  }
+  // 多行内容（轮播图的多个地址）和 JSON 属性原样保留
+  assert.equal(rows[2][col("轮播图")].split("\n").length, source.rows[0][col("轮播图")].split("\n").length);
+  assert.deepEqual(JSON.parse(rows[2][col("产品属性")]), JSON.parse(source.rows[0][col("产品属性")]));
+
   const bad = await s.call("POST", "/api/hot-product/export", { token, body: { productIds: [1], hotLink: "https://x.com", title: "顶级硅胶手机壳 适用iPhone 18 Pro" } });
   assert.equal(bad.json.code, 42201); assert.match(bad.json.message, /顶级/);
-  assert.equal(csvCell('=HYPERLINK("x")'), `"'=HYPERLINK(""x"")"`);
+  assert.equal((await s.call("POST", "/api/hot-product/export", { token, body: { productIds: [99], hotLink: "https://x.com", title: GOOD } })).json.message, "商品不存在：99");
   await s.close();
+});
+
+test("xlsx 读写：特殊字符、换行、首尾空白、公式样文本都按文本原样往返；文件结构与商品表一致", () => {
+  const header = ["A列", "B<列>", "C&列"];
+  const tricky = ["=HYPERLINK(\"http://x\")", "  首尾空白  ", "多行\n内容\r\n第三行"];
+  const odd = ["emoji 📱 中文", "引号\"'<>&", "控制\u0001字符"];
+  const file = buildXlsx({ sheetName: "pddkj_product", header, rows: [tricky, odd, ["只有一格"]], createdAt: new Date("2026-11-22T00:00:00Z") });
+  const { sheetName, rows } = readXlsx(file);
+  assert.equal(sheetName, "pddkj_product");
+  assert.deepEqual(rows[0], header);
+  assert.deepEqual(rows[1], ["=HYPERLINK(\"http://x\")", "  首尾空白  ", "多行\n内容\n第三行"]);
+  assert.deepEqual(rows[2], ["emoji 📱 中文", "引号\"'<>&", "控制字符"]);
+  assert.deepEqual(rows[3], ["只有一格", "", ""]);
+  // 所有单元格都是文本类型，公式样的内容不会被当成公式
+  const { unzip } = require("../src/xlsx");
+  const sheet = unzip(file).get("xl/worksheets/sheet1.xml").toString("utf8");
+  assert.equal((sheet.match(/<c /g) || []).length, 12);
+  assert.equal((sheet.match(/t="inlineStr"/g) || []).length, 12);
+  assert.ok(!sheet.includes("<f>"));
+  assert.match(sheet, /<row r="1" customHeight="true" ht="42.5">/);
+  assert.match(sheet, /<dimension ref="A1:C4"\/>/);
+  assert.deepEqual([...unzip(file).keys()].sort(), ["[Content_Types].xml", "_rels/.rels", "docProps/app.xml", "docProps/core.xml", "xl/_rels/workbook.xml.rels", "xl/sharedStrings.xml", "xl/styles.xml", "xl/workbook.xml", "xl/worksheets/sheet1.xml"]);
+  assert.throws(() => readXlsx(Buffer.from("not a zip file at all")), /不是有效的 xlsx/);
 });
 
 test("跨域：预检放行；白名单模式只回显允许的来源", async () => {
@@ -235,8 +294,6 @@ test("链接抓取：拦截内网地址，解析网页信息，清洗模型输�
 });
 
 // ---------- 亚马逊商品链接 ----------
-const fs = require("node:fs");
-const path = require("node:path");
 const { parseAmazonHtml, extractAsin, canonicalAmazonUrl, detectPlatform } = require("../src/linkInfo");
 const { buildMessages } = require("../src/agent");
 
@@ -285,7 +342,7 @@ test("亚马逊：商品卖点和规格进入提示词，并要求用中文提�
     description: "", keywords: "", bullets: ["Scratch-resistant coating", "Built-in magnets for MagSafe"],
     attributes: [{ name: "Material", value: "Polycarbonate" }]
   };
-  const prompt = buildMessages({ products: [{ name: "iPhone 18 Pro", color: "黑色", category: "手机壳" }], linkInfo })[1].content;
+  const prompt = buildMessages({ products: [{ model: "iPhone 18 Pro", color: "黑色", category: "手机壳", attributes: [] }], linkInfo })[1].content;
   assert.match(prompt, /平台：亚马逊/);
   assert.match(prompt, /爆款标题：Apple iPhone 15 Plus Clear Case with MagSafe/);
   assert.match(prompt, /爆款规格：Material=Polycarbonate/);
@@ -297,7 +354,7 @@ test("亚马逊：商品卖点和规格进入提示词，并要求用中文提�
   const calls = [];
   const s = await start({ fetchImpl: modelFetch([GOOD], calls), linkFetcher: async () => linkInfo });
   const token = await s.login();
-  const r = await s.call("POST", "/api/agent/hot-product/recognize", { token, body: { productIds: [3], hotLink: linkInfo.sourceUrl } });
+  const r = await s.call("POST", "/api/agent/hot-product/recognize", { token, body: { productIds: [2], hotLink: linkInfo.sourceUrl } });
   assert.equal(r.json.code, 0);
   assert.equal(r.json.data.extractedInfo.platform, "亚马逊");
   assert.equal(r.json.data.extractedInfo.asin, "B0CHX3QBCH");
@@ -408,7 +465,7 @@ test("商品数据服务：接口把配置和剩余时间传给读取层；健�
   assert.equal(health.json.data.amazonDataServiceConfigured, true);
   assert.ok(!JSON.stringify(health.json).includes("test-scraper-key"));
   const before = Date.now();
-  const r = await s.call("POST", "/api/agent/hot-product/recognize", { token, body: { productIds: [3], hotLink: "https://www.amazon.com/dp/B0CHX3QBCH" } });
+  const r = await s.call("POST", "/api/agent/hot-product/recognize", { token, body: { productIds: [2], hotLink: "https://www.amazon.com/dp/B0CHX3QBCH" } });
   assert.equal(r.json.data.extractedInfo.source, "scraper");
   assert.equal(received.scraper.apiKey, "test-scraper-key");
   // 留给商品数据服务的截止时间 = 总预算 50 秒 - 给模型预留的 5 秒
@@ -468,10 +525,10 @@ test("商品数据服务：美国站带 country_code=us；同一商品的不同�
     }
   });
   const token = await s.login();
-  const body = (hotLink) => ({ token, body: { productIds: [3], hotLink } });
+  const body = (hotLink) => ({ token, body: { productIds: [2], hotLink } });
   await s.call("POST", "/api/agent/hot-product/recognize", body("https://www.amazon.com/dp/B0CHX3QBCH"));
   await s.call("POST", "/api/agent/hot-product/recognize", body("https://www.amazon.com/Long-Title/dp/B0CHX3QBCH/ref=sr_1_1?keywords=case"));
-  await s.call("POST", "/api/agent/hot-product/regenerate-title", { token, body: { productIds: [3], hotLink: "https://www.amazon.com/gp/product/B0CHX3QBCH", previousTitle: "旧标题" } });
+  await s.call("POST", "/api/agent/hot-product/regenerate-title", { token, body: { productIds: [2], hotLink: "https://www.amazon.com/gp/product/B0CHX3QBCH", previousTitle: "旧标题" } });
   assert.equal(reads, 1);
   await s.call("POST", "/api/agent/hot-product/recognize", body("https://www.amazon.com/dp/B0DCZ4WZQ1"));
   assert.equal(reads, 2);

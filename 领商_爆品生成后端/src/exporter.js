@@ -1,19 +1,18 @@
-const HEADER = ["爆款链接", "生成标题", "商品名称", "颜色", "重量", "价格", "外包装形状"];
+const { buildXlsx } = require("./xlsx");
+const { exportRows, EXPORT_COLUMNS, EXPORT_SHEET_NAME } = require("./products");
 
-// Excel 会把以 = + - @ 开头的单元格当公式执行，前面加单引号让它按文本显示
-function csvCell(value) {
-  let text = String(value ?? "");
-  if (/^[=+\-@\t\r]/.test(text)) text = `'${text}`;
-  return `"${text.replace(/"/g, '""')}"`;
+// 导出文件与商品表格式一致：同样的工作表名、69 列表头和样式；
+// 每个选中的商品一行，产品标题换成生成的标题，来源URL 写入爆款链接，更新时间写为导出时间。
+function buildExport({ productIds, title, hotLink, now = new Date() }) {
+  return buildXlsx({
+    sheetName: EXPORT_SHEET_NAME,
+    header: EXPORT_COLUMNS,
+    rows: exportRows(productIds, { title, hotLink, now }),
+    createdAt: now
+  });
 }
 
-function buildCsv({ hotLink, title, products }) {
-  const rows = products.map((item) => [hotLink, title, item.name, item.color, item.weight, item.price, item.packaging]);
-  const body = [HEADER, ...rows].map((cols) => cols.map(csvCell).join(",")).join("\r\n");
-  // 带 BOM，Excel 直接打开中文不乱码
-  return Buffer.from("﻿" + body + "\r\n", "utf8");
-}
+const EXPORT_FILENAME = "product_list.xlsx";
+const EXPORT_CONTENT_TYPE = "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet";
 
-const EXPORT_FILENAME = "领商_爆品生成方案.csv";
-
-module.exports = { buildCsv, csvCell, EXPORT_FILENAME };
+module.exports = { buildExport, EXPORT_FILENAME, EXPORT_CONTENT_TYPE };

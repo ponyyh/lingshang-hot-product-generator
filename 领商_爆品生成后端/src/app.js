@@ -11,7 +11,7 @@ const { listProducts, getProductsByIds, CATALOG_SIZE } = require("./products");
 const { checkTitle } = require("./compliance");
 const { fetchLinkInfo, linkCacheKey } = require("./linkInfo");
 const { generateTitle, newTaskId, resolveTaskId } = require("./agent");
-const { buildCsv, EXPORT_FILENAME } = require("./exporter");
+const { buildExport, EXPORT_FILENAME, EXPORT_CONTENT_TYPE } = require("./exporter");
 
 const MAX_BODY_BYTES = 100 * 1024;
 const MAX_PRODUCT_IDS = 100;
@@ -251,21 +251,21 @@ function createHandler(overrides = {}) {
     "POST /api/hot-product/export": {
       handler: async ({ req, res, baseHeaders }) => {
         const body = await readJsonBody(req);
-        const { products } = parseProductIds(body.productIds);
+        const { ids } = parseProductIds(body.productIds);
         const hotLink = parseHotLink(body.hotLink);
         const title = parseTitle(body.title);
         // 不信任前端已校验的结论，导出前在服务端再校验一次
         const check = checkTitle(title);
         if (!check.passed) throw new AppError(CODES.TITLE_REJECTED, check.inlineMsg);
 
-        const csv = buildCsv({ hotLink, title, products });
+        const file = buildExport({ productIds: ids, title, hotLink });
         res.writeHead(200, {
           ...baseHeaders,
-          "Content-Type": "text/csv; charset=utf-8",
-          "Content-Length": csv.length,
-          "Content-Disposition": `attachment; filename="hot-product-plan.csv"; filename*=UTF-8''${encodeURIComponent(EXPORT_FILENAME)}`
+          "Content-Type": EXPORT_CONTENT_TYPE,
+          "Content-Length": file.length,
+          "Content-Disposition": `attachment; filename="${EXPORT_FILENAME}"`
         });
-        res.end(csv);
+        res.end(file);
         return undefined;
       }
     }

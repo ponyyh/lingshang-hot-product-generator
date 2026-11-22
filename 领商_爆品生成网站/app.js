@@ -89,6 +89,27 @@ function renderTitleState() {
   dom.aiRegenerateBar.classList.toggle("hidden", !state.recognized);
 }
 
+// ========== 商品行的单元格（字段与商品表一致） ==========
+function escapeHtml(value) {
+  return String(value ?? "").replace(/[&<>"']/g, (ch) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" })[ch]);
+}
+
+function productCells(item) {
+  // 预览图只接受 http/https 地址
+  const image = /^https?:\/\//i.test(item.previewImage || "")
+    ? `<img class="product-thumb" src="${escapeHtml(item.previewImage)}" alt="" loading="lazy" referrerpolicy="no-referrer">`
+    : "";
+  return `
+        <td class="col-thumb">${image}</td>
+        <td class="col-title" title="${escapeHtml(item.title)}">${escapeHtml(item.title)}</td>
+        <td>${escapeHtml(item.variantName)}</td>
+        <td class="col-sku">${escapeHtml(item.skuCode)}</td>
+        <td>${escapeHtml(item.declaredPrice)}</td>
+        <td>${escapeHtml(item.weight)}</td>
+        <td>${escapeHtml(item.packagingShape)}</td>
+        <td>${escapeHtml(item.packagingType)}</td>`;
+}
+
 // ========== 获取已选商品对象列表 ==========
 function getSelectedProducts() {
   return state.selectedIds
@@ -126,11 +147,7 @@ function renderProductTable() {
             state.checkedRowIds.has(item.id) ? "checked" : ""
           }>
         </td>
-        <td>${item.name}</td>
-        <td>${item.color}</td>
-        <td>${item.weight}</td>
-        <td>${item.price}</td>
-        <td>${item.packaging}</td>
+        ${productCells(item)}
       </tr>
     `
     )
@@ -167,7 +184,7 @@ function renderProductTable() {
 
 // ========== 弹窗商品数据拉取与渲染 ==========
 function renderModalPlaceholder(text) {
-  dom.modalProductList.innerHTML = `<tr><td colspan="6" style="text-align:center;padding:32px 0;color:#999;">${text}</td></tr>`;
+  dom.modalProductList.innerHTML = `<tr><td colspan="9" style="text-align:center;padding:32px 0;color:#999;">${text}</td></tr>`;
 }
 
 let modalRequestSeq = 0;
@@ -205,11 +222,7 @@ function renderModalList() {
         <td class="col-check">
           <input type="checkbox" class="modal-row-check" data-id="${item.id}" ${isChecked ? "checked" : ""} ${isDisabled ? "disabled" : ""} ${isDisabled ? 'title="最多只能选择 100 件商品"' : ""}>
         </td>
-        <td>${item.name}</td>
-        <td>${item.color}</td>
-        <td>${item.weight}</td>
-        <td>${item.price}</td>
-        <td>${item.packaging}</td>
+        ${productCells(item)}
       </tr>
     `;
     })

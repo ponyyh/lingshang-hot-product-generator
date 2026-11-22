@@ -14,7 +14,7 @@
       // 后端联调时可在此处注入登录态 Token，例如从 localStorage 读取
       const token = global.localStorage ? global.localStorage.getItem("lingshang_token") : "";
       const headers = { "Content-Type": "application/json" };
-      if (token) headers["Authorization"] = `Bearer ${token}`;
+      if (token && !API_CONFIG.MOCK_AUTH) headers["Authorization"] = `Bearer ${token}`;
       return headers;
     }
   };
@@ -92,30 +92,29 @@
   async function requestJson(url, options = {}) {
     const controller = new AbortController();
     const timer = setTimeout(() => controller.abort(), API_CONFIG.TIMEOUT_MS);
-
+    const key = global.crypto?.randomUUID?.() || `request_${Date.now()}_${Math.random().toString(36).slice(2)}`;
     try {
-      const response = await fetch(url, {
-        ...options,
-        headers: {
-          ...API_CONFIG.getAuthHeaders(),
-          ...(options.headers || {})
-        },
-        signal: controller.signal
-      });
-
-      if (!response.ok) {
-        const error = await response.json().catch(() => ({}));
-        throw new Error(error.message || `HTTP ${response.status}: ${response.statusText}`);
+      let response;
+      for (let attempt = 0; attempt < 2; attempt++) {
+        try {
+          response = await fetch(url, {
+            ...options,
+            headers: { ...API_CONFIG.getAuthHeaders(), "X-Idempotency-Key": key, ...(options.headers || {}) },
+            signal: controller.signal
+          });
+          break;
+        } catch (error) {
+          if (controller.signal.aborted || error.name === "AbortError") throw new Error("生成等待超时，请点击重试生成");
+          if (attempt === 1) throw new Error("网站连接中断，请检查网络后点击重试生成");
+          await delay(500);
+        }
       }
-      const payload = await response.json();
-      // 约定统一返回结构：{ code: 0, message: "ok", data: {...} }
-      if (typeof payload.code === "number" && payload.code !== 0) {
-        throw new Error(payload.message || "接口返回异常");
-      }
+      const payload = await response.json().catch(() => null);
+      if (!response.ok) throw new Error(payload?.message || `服务暂时不可用（${response.status}），请重试`);
+      if (!payload) throw new Error("服务未返回有效结果，请点击重试生成");
+      if (typeof payload.code === "number" && payload.code !== 0) throw new Error(payload.message || "接口返回异常");
       return payload.data !== undefined ? payload.data : payload;
-    } finally {
-      clearTimeout(timer);
-    }
+    } finally { clearTimeout(timer); }
   }
 
   function delay(ms) {

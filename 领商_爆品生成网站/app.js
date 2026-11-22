@@ -114,7 +114,10 @@ async function tryAutoRecognize(fromUserPasteOrInput = false) {
     renderTitleState();
     showToast("已自动识别并生成标题预览", "success");
   } catch (err) {
-    showToast(err.message || "爆款链接识别失败，请稍后重试", "error");
+    state.hasTitleError = true;
+    dom.titleErrorMsg.textContent = err.message || "爆款链接识别失败，请点击重试生成";
+    renderTitleState();
+    showToast(dom.titleErrorMsg.textContent, "error");
   } finally {
     state.isRecognizing = false;
     if (dom.hotLinkInput.value.trim() !== val || state.selectedIds.join(",") !== requestProducts) tryAutoRecognize(false);
@@ -130,7 +133,8 @@ function renderTitleState() {
   dom.titleErrorMsg.classList.toggle("hidden", !state.hasTitleError);
 
   // AI 重新生成提示条：点击「识别」生成标题后显示
-  dom.aiRegenerateBar.classList.toggle("hidden", !state.recognized);
+  dom.aiRegenerateBar.classList.toggle("hidden", !state.recognized && !state.hasTitleError);
+  if (!dom.regenerateBtn.classList.contains("spinning")) dom.regenerateBtn.querySelector(".regen-text").textContent = state.hasTitleError ? "重试生成" : "重新生成";
 }
 
 // ========== 获取已选商品对象列表 ==========
@@ -422,7 +426,8 @@ function bindEvents() {
 
   // 6. AI「重新生成」标题（调用 AI Agent 接口：POST /api/agent/hot-product/regenerate-title）
   dom.regenerateBtn.addEventListener("click", async () => {
-    if (dom.regenerateBtn.classList.contains("spinning")) return;
+    if (state.isRecognizing || dom.regenerateBtn.classList.contains("spinning")) return;
+    if (!state.recognized) return tryAutoRecognize(true);
     dom.regenerateBtn.classList.add("spinning");
     dom.regenerateBtn.querySelector(".regen-text").textContent = "生成中...";
 
@@ -441,10 +446,13 @@ function bindEvents() {
       renderTitleState();
       showToast("已重新生成符合平台规范的爆款标题", "success");
     } catch (err) {
-      showToast(err.message || "标题重新生成失败，请稍后重试", "error");
+      state.hasTitleError = true;
+      dom.titleErrorMsg.textContent = err.message || "标题重新生成失败，请重试";
+      renderTitleState();
+      showToast(dom.titleErrorMsg.textContent, "error");
     } finally {
       dom.regenerateBtn.classList.remove("spinning");
-      dom.regenerateBtn.querySelector(".regen-text").textContent = "重新生成";
+      renderTitleState();
     }
   });
 

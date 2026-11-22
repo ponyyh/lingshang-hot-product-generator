@@ -130,6 +130,7 @@ function createHandler(overrides = {}) {
   const strictStatus = overrides.strictStatus ?? /^(1|true)$/i.test(process.env.STRICT_HTTP_STATUS || "");
   const log = overrides.log || console.log;
   const linkCache = new Map();
+  const generationRequests = new Map();
   const rateWindows = new Map();
   let activeAgentRequests = 0;
 
@@ -157,7 +158,7 @@ function createHandler(overrides = {}) {
     const origin = String(req.headers.origin || "").replace(/\/$/, "");
     const headers = {
       "Access-Control-Allow-Methods": "GET,POST,OPTIONS",
-      "Access-Control-Allow-Headers": "Content-Type, Authorization",
+      "Access-Control-Allow-Headers": "Content-Type, Authorization, X-Idempotency-Key",
       "Access-Control-Expose-Headers": "Content-Disposition, X-Request-Id",
       "Access-Control-Max-Age": "600"
     };
@@ -190,6 +191,21 @@ function createHandler(overrides = {}) {
       workflowRunId: result.workflowRunId }, title: result.title, attempts: 1 };
     } finally { activeAgentRequests -= 1; }
 
+  }
+
+  async function once(req, body, generate) {
+    const idempotency = req.headers["x-idempotency-key"];
+    if (typeof idempotency !== "string" || !/^[\w-]{16,128}$/.test(idempotency)) return generate();
+    const now = Date.now();
+    for (const [key, value] of generationRequests) if (value.expiresAt < now) generationRequests.delete(key);
+    const key = crypto.createHash("sha256").update(`${req.url}|${req.headers.authorization || ""}|${idempotency}|${JSON.stringify(body)}`).digest("hex");
+    const prior = generationRequests.get(key);
+    if (prior) return prior.promise;
+    if (generationRequests.size >= 200) throw new AppError(CODES.RATE_LIMITED, "请求较多，请稍后重试");
+    const promise = Promise.resolve().then(generate);
+    generationRequests.set(key, { promise, expiresAt: now + 5 * 60000 });
+    try { return await promise; }
+    catch (err) { generationRequests.delete(key); throw err; }
   }
 
   const routes = {
@@ -231,6 +247,7 @@ function createHandler(overrides = {}) {
     "POST /api/agent/hot-product/recognize": {
       handler: async ({ req, startedAt }) => {
         const body = await readJsonBody(req);
+        return once(req, body, async () => {
         const { ids, linkInfo, title, attempts } = await runAgent({ body, startedAt });
         return {
           taskId: newTaskId(),
@@ -238,6 +255,7 @@ function createHandler(overrides = {}) {
           extractedInfo: { ...linkInfo, matchedCount: ids.length },
           attempts
         };
+        });
       }
     },
 
@@ -246,8 +264,10 @@ function createHandler(overrides = {}) {
         const body = await readJsonBody(req);
         const previousTitle =
           typeof body.previousTitle === "string" ? Array.from(body.previousTitle.trim()).slice(0, 300).join("") : "";
-        const { title, attempts } = await runAgent({ body, startedAt, previousTitle });
-        return { taskId: resolveTaskId(body.taskId), title, attempts };
+        return once(req, body, async () => {
+          const { title, attempts } = await runAgent({ body, startedAt, previousTitle });
+          return { taskId: resolveTaskId(body.taskId), title, attempts };
+        });
       }
     },
 

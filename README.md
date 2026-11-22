@@ -52,3 +52,8 @@
 GitHub 仓库根目录与本目录发布文件一致，忽略 `.env`、`.vefaas`、`.DS_Store`、临时文件及依赖。`deployment.json` 是不含密钥的部署目标配置。
 
 参考开发文档原文为 Chat/Agent API；本项目是 Workflow，实际使用 [Dify Workflow API](https://docs.dify.ai/zh/api-reference/guides/workflow)。
+
+## 网络与双商品修复
+
+生成请求的网关超时为180秒，Dify预算150秒。网络中断时前端最多自动重试一次，同一请求键在同一服务实例内复用5分钟结果，避免重复生成；持续失败显示中文原因与“重试生成”按钮。业务校验失败不自动重发。
+多SKU只提取共有正向属性，“无/否/不带”不作为卖点。没有共有正向属性时生成客观品类前标题。

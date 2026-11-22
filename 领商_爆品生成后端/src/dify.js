@@ -38,7 +38,7 @@ function validatePrefix(title, products) {
 async function runDify(config, { products, hotLink, hotTitle = '', previousTitle = '', fetchImpl = fetch }) {
   if (!config.dify?.apiKey) throw new AppError(CODES.AGENT_NOT_CONFIGURED, 'Dify 工作流尚未配置');
   const common = (products[0]?.attributes || []).filter(a => products.every(p =>
-    (p.attributes || []).some(other => other.name === a.name && other.value === a.value)));
+    (p.attributes || []).some(other => other.name === a.name && other.value === a.value))).filter(a => !/^(否|无|不带|不支持|no|false)$/i.test(a.value.trim()));
   const productInfo = JSON.stringify({品类:"手机壳",选中商品数:products.length,
     所有SKU共有且唯一允许写入标题的属性:common,
     说明:common.length ? "只使用上述共有属性，其他属性均不可使用" : "没有共有材质和功能，只写品类，不得编造材质工艺卖点",
@@ -49,7 +49,7 @@ async function runDify(config, { products, hotLink, hotTitle = '', previousTitle
     response = await fetchImpl(`${config.dify.baseUrl}/workflows/run`, {
       method: 'POST', headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${config.dify.apiKey}` },
       body: JSON.stringify({ inputs: { hot_link: hotLink, hot_title: hotTitle, product_info: productInfo,
-        previous_title: previousTitle, feedback: '中文前标题6到30字符，不含型号后缀，只用所有选中SKU共有的已证实属性。',
+        previous_title: previousTitle, feedback: common.length ? '中文前标题6到30字符，不含型号后缀，只用所有选中SKU共有的已证实属性。不要写否定功能。' : '这些SKU没有共有正向属性，请仅输出品类前标题：手机背壳保护套。禁止写无支架、不带支架或任何材质和工艺。',
         ip_blacklist: '图拉斯,TORRAS,CASETiFY,全网最低,第一,顶级,绝对,无毒,认证' },
         response_mode: 'blocking', user: `lingshang-${crypto.randomUUID()}` }),
       signal: AbortSignal.timeout(config.dify.timeoutMs)

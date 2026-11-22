@@ -109,3 +109,18 @@ test('documented silicone molding is a process, while unsupported silicone mater
  assert.throws(()=>validatePrefix('硅胶成型液态硅胶手机壳',single));
  assert.throws(()=>validatePrefix('硅胶成型手机壳保护套',getProductsByIds([2]).products));
 });
+
+test('two different SKUs pass only shared positive attributes; no negative feature becomes a selling point',async t=>{
+ const f=await fixture(t,{payload:{data:{status:'succeeded',outputs:{title:'手机背壳保护套',keywords:['手机壳','磁吸']}}}});
+ const r=await f.json('/api/agent/hot-product/recognize',{productIds:[1,2],hotLink:SHARE});
+ assert.equal(r.code,0);const inputs=f.calls[0].body.inputs;const info=JSON.parse(inputs.product_info);
+ assert.deepEqual(info.所有SKU共有且唯一允许写入标题的属性,[]);
+ assert.match(inputs.feedback,/手机背壳保护套/);assert.match(inputs.feedback,/禁止写无支架/);
+});
+test('lost connection retries reuse a single generation and task id',async t=>{
+ const f=await fixture(t);const body={productIds:[1,2],hotLink:SHARE};
+ const send=()=>fetch(f.base+'/api/agent/hot-product/recognize',{method:'POST',headers:{'Content-Type':'application/json','X-Idempotency-Key':'same_retry_request_1234'},body:JSON.stringify(body)}).then(r=>r.json());
+ const responses=await Promise.all([send(),send()]);assert.equal(responses[0].code,0);assert.equal(responses[1].code,0);
+ assert.equal(f.calls.length,1);assert.equal(responses[0].data.taskId,responses[1].data.taskId);
+ const changed=await fetch(f.base+'/api/agent/hot-product/recognize',{method:'POST',headers:{'Content-Type':'application/json','X-Idempotency-Key':'same_retry_request_1234'},body:JSON.stringify({...body,productIds:[1]})});assert.equal((await changed.json()).code,0);assert.equal(f.calls.length,2);
+});

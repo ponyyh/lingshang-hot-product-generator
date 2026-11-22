@@ -57,36 +57,19 @@
 
   const FORBIDDEN_KEYWORDS = ["铠甲", "小跟班", "最", "第一", "绝对", "顶级", "全网最低", "假一赔十"];
 
-  const MOCK_PRODUCTS = (() => {
-    const baseItems = [
-      { id: 1, name: "Samsung S26", color: "黑色", weight: "130.2g", price: "¥188.00", packaging: "文案文案文案文案" },
-      { id: 2, name: "iPhone 18 Pro", color: "银色", weight: "118.6g", price: "¥188.00", packaging: "文案文案文案文案" },
-      { id: 3, name: "iPhone 18 Pro", color: "黑色", weight: "118.6g", price: "¥188.00", packaging: "文案文案文案文案" }
-    ];
-    const models = [
-      "iPhone 18 Pro Max", "iPhone 18 Pro", "iPhone 18", "iPhone 17 Air", "iPhone 17 Pro Max",
-      "iPhone 17 Pro", "iPhone 16 Pro Max", "iPhone 16 Pro", "iPhone 15 Pro Max", "Samsung S26 Ultra",
-      "Samsung S26", "Samsung S25 Ultra", "Huawei Mate 80 Pro", "Huawei Pura 80", "Xiaomi 16 Pro",
-      "OPPO Find X9 Pro", "vivo X200 Pro"
-    ];
-    const colors = [
-      "星光白", "樱花粉", "酒红色", "钛灰蓝", "燕麦白", "钛金属灰", "冰川蓝", "奶油黄",
-      "薄荷青", "雾霾蓝", "石墨黑", "曜石黑", "薰衣草紫", "松柏绿", "珊瑚橙", "玫瑰金"
-    ];
-    const prices = ["¥158.00", "¥168.00", "¥178.00", "¥188.00", "¥198.00", "¥218.00", "¥228.00"];
-    const packagings = ["环保磁吸礼盒", "简约透明吸塑盒", "标准彩印纸盒", "定制防震硬盒", "轻奢磨砂抽屉盒"];
-
-    const list = [...baseItems];
-    for (let i = 4; i <= 200; i++) {
-      const m = models[(i - 4) % models.length];
-      const c = colors[(i * 3) % colors.length];
-      const w = (110 + ((i * 7) % 28) + ((i * 3) % 10) / 10).toFixed(1) + "g";
-      const p = prices[(i - 4) % prices.length];
-      const pkg = packagings[(i - 4) % packagings.length];
-      list.push({ id: i, name: m, color: c, weight: w, price: p, packaging: pkg });
+  // 模拟模式下的商品：字段与后端 /api/products 返回的一致（来自商品表）
+  const MOCK_PRODUCTS = [
+    {
+      id: 1, title: "Phone Case for Samsung S26", variantName: "粉红色，Galaxy S26", color: "粉红色", model: "Galaxy S26",
+      skuCode: "GDK-Galaxy S26-Pink-YXG134", declaredPrice: "18.0", weight: "42.0",
+      packagingShape: "长方体", packagingType: "软包装+软物", previewImage: ""
+    },
+    {
+      id: 2, title: "Phone Case Suitable for iPhone 18 Pro", variantName: "混合色1，iPhone 18 Pro", color: "混合色1", model: "iPhone 18 Pro",
+      skuCode: "FLJK-iPhone 18 Pro-White-YXFL031", declaredPrice: "18.0", weight: "42.0",
+      packagingShape: "长方体", packagingType: "软包装+软物", previewImage: ""
     }
-    return list;
-  })();
+  ];
 
   let mockAiIndex = 0;
 
@@ -217,17 +200,14 @@
   /**
    * 1. [后端接口] 获取可关联的商品列表
    * GET {BACKEND_BASE_URL}/api/products?keyword=&page=1&pageSize=200
-   * 返回：{ total: number, list: Array<{ id, name, color, weight, price, packaging }> }
+   * 返回：{ total, list: Array<{ id, title, variantName, color, model, skuCode, declaredPrice, weight, packagingShape, packagingType, previewImage }> }
    */
   async function fetchProducts({ keyword = "", page = 1, pageSize = 200 } = {}) {
     if (API_CONFIG.USE_MOCK) {
       const kw = keyword.trim().toLowerCase();
       const filtered = kw
-        ? MOCK_PRODUCTS.filter(
-            (item) =>
-              item.name.toLowerCase().includes(kw) ||
-              item.color.toLowerCase().includes(kw) ||
-              item.packaging.toLowerCase().includes(kw)
+        ? MOCK_PRODUCTS.filter((item) =>
+            [item.title, item.variantName, item.skuCode].some((field) => field.toLowerCase().includes(kw))
           )
         : MOCK_PRODUCTS;
       const start = (page - 1) * pageSize;
@@ -338,19 +318,21 @@
    * 5. [后端导出接口] 导出并下载爆品生成方案
    * POST {BACKEND_BASE_URL}/api/hot-product/export
    * 入参：{ taskId: string | null, productIds: number[], hotLink: string, title: string }
-   * 返回：支持 JSON { downloadUrl, filename } 或直接返回文件流 Blob；Mock 模式下前端生成 CSV 下载
+   * 返回：与商品表格式一致的 xlsx 文件流（也兼容 JSON { downloadUrl, filename }）；Mock 模式下前端生成 CSV 下载
    */
   async function exportHotProduct({ taskId = null, productIds, products = [], hotLink, title }) {
     if (API_CONFIG.USE_MOCK) {
-      const header = ["爆款链接", "生成标题", "商品名称", "颜色", "重量", "价格", "外包装形状"];
+      // 模拟模式只导出主要列的 CSV；真实接口导出的是与商品表格式一致的 xlsx
+      const header = ["产品标题", "变种名称", "SKU货号", "申报价格", "重量", "外包装形状", "外包装类型", "来源URL"];
       const rows = products.map((item) => [
-        hotLink,
         title,
-        item.name,
-        item.color,
+        item.variantName,
+        item.skuCode,
+        item.declaredPrice,
         item.weight,
-        item.price,
-        item.packaging
+        item.packagingShape,
+        item.packagingType,
+        hotLink
       ]);
 
       const csvContent =
@@ -394,8 +376,11 @@
       throw new Error(`导出失败 (HTTP ${response.status})`);
     }
     const blob = await response.blob();
-    triggerBrowserDownload(blob, "领商_爆品生成方案.csv");
-    return { success: true };
+    // 文件名取服务端给的，取不到时用默认名
+    const disposition = response.headers.get("content-disposition") || "";
+    const filename = /filename="([^"]+)"/.exec(disposition)?.[1] || "product_list.xlsx";
+    triggerBrowserDownload(blob, filename);
+    return { success: true, filename };
   }
 
   function triggerBrowserDownload(blob, filename) {

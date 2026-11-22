@@ -1,5 +1,8 @@
 // 线上验收脚本：对已部署的后端逐个接口做真实请求。
 // 用法：BASE_URL=https://xxx.vercel.app TEST_USER=账号 TEST_PASS=密码 node scripts/smoke.mjs
+import { createRequire } from "node:module";
+const { readXlsx } = createRequire(import.meta.url)("../src/xlsx.js");
+
 const BASE = (process.env.BASE_URL || "http://localhost:8787").replace(/\/$/, "");
 const USER = process.env.TEST_USER || "";
 const PASS = process.env.TEST_PASS || "";
@@ -61,13 +64,19 @@ if (!token) {
 }
 
 const products = await call("GET", "/api/products?page=1&pageSize=200", { token });
-check("商品列表", products.json?.data?.total === 200 && products.json.data.list.length === 200, `total=${products.json?.data?.total} ${products.ms}ms`);
-const search = await call("GET", "/api/products?keyword=" + encodeURIComponent("S26"), { token });
-check("商品搜索", search.json?.data?.total > 0, `total=${search.json?.data?.total}`);
+const list = products.json?.data?.list || [];
+check("商品列表", products.json?.data?.total > 0 && list.length === products.json.data.total, `total=${products.json?.data?.total} ${products.ms}ms`);
+check(
+  "商品字段与商品表一致",
+  list.length > 0 && ["title", "variantName", "skuCode", "declaredPrice", "weight", "packagingShape", "packagingType", "previewImage"].every((key) => typeof list[0][key] === "string"),
+  list[0] ? `${list[0].title} / ${list[0].variantName} / ${list[0].skuCode}` : ""
+);
+const search = await call("GET", "/api/products?keyword=" + encodeURIComponent(list[0]?.skuCode || "x"), { token });
+check("商品搜索（按 SKU货号）", search.json?.data?.total === 1, `total=${search.json?.data?.total}`);
 const empty = await call("GET", "/api/products?keyword=" + encodeURIComponent("不存在的商品"), { token });
 check("搜索空结果", empty.json?.code === 0 && empty.json.data.total === 0 && empty.json.data.list.length === 0);
 
-const productIds = [1, 2, 3];
+const productIds = list.slice(0, 2).map((item) => item.id);
 const rec = await call("POST", "/api/agent/hot-product/recognize", { token, body: { productIds, hotLink: HOT_LINK } });
 const recData = rec.json?.data || {};
 check("识别爆款链接（真实模型）", rec.json?.code === 0 && Boolean(recData.title), `${rec.ms}ms 链接已读取=${recData.extractedInfo?.fetched}`);
@@ -93,11 +102,23 @@ const extreme = await call("POST", "/api/compliance/validate-title", { token, bo
 check("校验：极限词被拦截", extreme.json?.data?.passed === false && extreme.json.data.violationType === "platform", extreme.json?.data?.inlineMsg);
 
 const exp = await call("POST", "/api/hot-product/export", { token, body: { taskId: recData.taskId, productIds, hotLink: HOT_LINK, title } });
-const csv = exp.buf ? exp.buf.toString("utf8") : "";
+let sheet = { sheetName: "", rows: [] };
+try {
+  sheet = readXlsx(exp.buf);
+} catch (err) {
+  sheet.error = err.message;
+}
+const header = sheet.rows[0] || [];
+const cell = (row, name) => (sheet.rows[row] || [])[header.indexOf(name)];
 check(
-  "导出 CSV 文件",
-  exp.status === 200 && /text\/csv/.test(exp.headers.get("content-type") || "") && csv.charCodeAt(0) === 0xfeff && csv.trim().split("\r\n").length === productIds.length + 1,
-  `${exp.buf?.length || 0} 字节，${csv.trim().split("\r\n").length} 行`
+  "导出 xlsx 文件",
+  exp.status === 200 && /spreadsheetml\.sheet/.test(exp.headers.get("content-type") || "") && sheet.rows.length === productIds.length + 1,
+  sheet.error || `${exp.buf?.length || 0} 字节，工作表 ${sheet.sheetName}，${header.length} 列，${sheet.rows.length - 1} 行商品`
+);
+check(
+  "导出内容：表头为商品表的列，标题和来源链接已写入",
+  header[0] === "产品标题" && header.includes("SKU货号") && header.includes("来源URL") && cell(1, "产品标题") === title && cell(1, "来源URL") === HOT_LINK && cell(1, "SKU货号") === list[0].skuCode,
+  `产品标题=${String(cell(1, "产品标题")).slice(0, 30)}… SKU货号=${cell(1, "SKU货号")}`
 );
 const badExp = await call("POST", "/api/hot-product/export", { token, body: { productIds, hotLink: HOT_LINK, title: "顶级硅胶手机壳 适用iPhone 18 Pro 防摔" } });
 check("导出：违规标题被服务端拦截", badExp.json?.code === 42201, badExp.json?.message);

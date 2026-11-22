@@ -31,11 +31,11 @@ BASE_URL=<地址> TEST_USER=<账号> TEST_PASS=<密码> node scripts/smoke.mjs  
 |---|---|---|
 | 健康检查 | `GET /api/health` | 不需要登录 |
 | 登录 | `POST /api/auth/login` | `{ username, password }` → `{ token, tokenType, expiresIn }` |
-| 商品列表 | `GET /api/products?keyword=&page=1&pageSize=200` | `pageSize` 最大 200；无结果时 `total: 0, list: []` |
+| 商品列表 | `GET /api/products?keyword=&page=1&pageSize=200` | 每个商品返回 `id, title, variantName, color, model, skuCode, declaredPrice, weight, packagingShape, packagingType, previewImage`；按产品标题、变种名称、SKU货号搜索；`pageSize` 最大 200；无结果时 `total: 0, list: []` |
 | 识别爆款链接 | `POST /api/agent/hot-product/recognize` | `{ productIds, hotLink }` → `{ taskId, title, extractedInfo, attempts }` |
 | 重新生成标题 | `POST /api/agent/hot-product/regenerate-title` | `{ taskId, productIds, hotLink, previousTitle }` → `{ taskId, title, attempts }` |
 | 标题校验 | `POST /api/compliance/validate-title` | `{ title, productIds }` → `{ passed }`，不通过时带 `violationType`、`category`、`hitWords`、`toastMsg`、`inlineMsg` |
-| 导出方案 | `POST /api/hot-product/export` | `{ taskId, productIds, hotLink, title }` → 直接返回 CSV 文件流；导出前服务端会再校验一次标题 |
+| 导出方案 | `POST /api/hot-product/export` | `{ taskId, productIds, hotLink, title }` → 直接返回 xlsx 文件流（`product_list.xlsx`）；导出前服务端会再校验一次标题 |
 
 错误码：`40001` 参数错误，`40101` 未登录或登录过期，`40102` 账号或密码错误，`40401` 接口不存在，`42201` 标题未通过校验，`42901` 模型限流，`50201` 模型服务不可用，`50301` 模型未配置，`50401` 模型超时。
 
@@ -46,6 +46,15 @@ BASE_URL=<地址> TEST_USER=<账号> TEST_PASS=<密码> node scripts/smoke.mjs  
 - **重试**：生成的标题会先过一遍合规校验，不通过时带着原因让模型重写一次，仍不通过则删除极限词兜底，再不行返回 `42201`。模型超时或报错不自动重试，由用户点「重新生成」。
 - **鉴权**：除健康检查和登录外都需要 `Authorization: Bearer <token>`，令牌默认 24 小时有效。测试账号在 `.env` 的 `TEST_ACCOUNTS` 里配置。
 - **跨域**：页面与接口同源时不涉及。前端单独部署时，把前端来源写进 `ALLOWED_ORIGINS`（当前为 `*`），放行 `GET, POST, OPTIONS` 和 `Content-Type, Authorization` 请求头。用的是请求头鉴权，不涉及 Cookie。
+
+## 商品库与导出格式
+
+- **商品库来自商品表**：`src/data/products.json` 由商品表（xlsx）导入，表头和列顺序原样保存。更新商品时运行 `node scripts/import-products.mjs <商品表.xlsx>`，再重新部署。
+- **页面展示的字段**：预览图、产品标题、变种名称、SKU货号、申报价格、重量、外包装形状、外包装类型，都直接取商品表里的同名列。
+- **导出文件**：与商品表格式一致的 xlsx——工作表名 `pddkj_product`、同样的 69 列表头和样式，所有单元格为文本。每个选中的商品一行，顺序与选择顺序一致。
+- **导出时改动的列**：只有三列。`产品标题` 换成生成并校验通过的标题，`来源URL` 写入爆款链接，`更新时间` 写为导出时间（北京时间）；其余 66 列原样保留。
+- **生成标题用到的商品信息**：机型（变种属性值二）、颜色（变种属性值一）和产品属性里的材质、工艺等；「是否带支架=否」这类否定属性不会交给模型。
+- **xlsx 读写**：`src/xlsx.js` 是零依赖实现，只支持单个工作表、文本单元格，够本项目用；读取时兼容内联字符串和共享字符串两种写法。
 
 ## 亚马逊商品链接
 
@@ -60,7 +69,7 @@ BASE_URL=<地址> TEST_USER=<账号> TEST_PASS=<密码> node scripts/smoke.mjs  
 
 ## 目前的限制
 
-- **商品库是种子数据**：200 条与前端演示数据一致的手机壳，写在 `src/products.js` 里，没有接真实商品库。
+- **商品库只有商品表里的商品**：目前是 2 个手机壳，没有接真实的商品后台；品类固定按手机壳处理。
 - **需要登录的链接读不到内容**：淘宝、千牛后台等链接抓不到商品信息，这时只根据关联商品生成标题，`extractedInfo.fetched` 为 `false`，`note` 里有原因。
 - **敏感词库是基础版**：`src/compliance.js` 里的词表只覆盖常见词，正式使用前应换成风控词库或内容安全服务。
 - **账号是配置文件里的测试账号**：没有用户表，也没有登录失败次数限制。

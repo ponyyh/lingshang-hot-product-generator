@@ -46,24 +46,43 @@ const API_CONFIG = {
 ### 接口 1：获取可关联商品列表（后端）
 
 - **方法与路径**：`GET {BACKEND_BASE_URL}/api/products`
-- **Query 参数**：`keyword`（搜索词，可选）、`page`（默认 `1`）、`pageSize`（默认 `200`）
+- **Query 参数**：`keyword`（搜索词，可选，匹配产品标题、变种名称、SKU货号）、`page`（默认 `1`）、`pageSize`（默认 `200`）
+- **字段来源**：商品表（`product_list.xlsx`）里的同名列
 - **响应 `data`**：
 
 ```json
 {
-  "total": 200,
+  "total": 2,
   "list": [
     {
       "id": 1,
-      "name": "Samsung S26",
-      "color": "黑色",
-      "weight": "130.2g",
-      "price": "¥188.00",
-      "packaging": "文案文案文案文案"
+      "title": "Phone Case for Samsung S26",
+      "variantName": "粉红色，Galaxy S26",
+      "color": "粉红色",
+      "model": "Galaxy S26",
+      "skuCode": "GDK-Galaxy S26-Pink-YXG134",
+      "declaredPrice": "18.0",
+      "weight": "42.0",
+      "packagingShape": "长方体",
+      "packagingType": "软包装+软物",
+      "previewImage": "https://img.cdnfe.com/product/open/....jpeg"
     }
   ]
 }
 ```
+
+| 接口字段 | 商品表列名 |
+|---|---|
+| `title` | 产品标题 |
+| `variantName` | 变种名称 |
+| `color` | 变种属性值一 |
+| `model` | 变种属性值二 |
+| `skuCode` | SKU货号 |
+| `declaredPrice` | 申报价格 |
+| `weight` | 重量 |
+| `packagingShape` | 外包装形状 |
+| `packagingType` | 外包装类型 |
+| `previewImage` | 预览图 |
 
 ### 接口 2：识别爆款链接并生成初版标题（AI Agent）
 
@@ -153,6 +172,6 @@ const API_CONFIG = {
 }
 ```
 
-- **响应支持两种格式**：
-  1. 直接返回文件流（CSV / Excel Blob），前端自动触发浏览器下载；
-  2. 返回 JSON `{ "downloadUrl": "https://...", "filename": "领商_爆品生成方案.csv" }`。
+- **响应**：直接返回 xlsx 文件流（`Content-Type: application/vnd.openxmlformats-officedocument.spreadsheetml.sheet`，文件名 `product_list.xlsx`），前端自动触发浏览器下载。
+- **文件格式**：与商品表一致——工作表 `pddkj_product`、同样的 69 列表头；每个选中的商品一行。
+- **写入的内容**：`产品标题` 为校验通过的最终标题，`来源URL` 为爆款链接，`更新时间` 为导出时间；其余列保持商品表原值。

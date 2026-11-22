@@ -26,6 +26,9 @@ function validatePrefix(title, products) {
     ['磨砂', /磨砂/], ['透明', /透明/], ['超薄', /超薄/], ['环保', /环保/], ['UV', /印花工艺.*UV/i], ['糖果色', /流行元素.*糖果色/], ['PC', /(?:主要材质|材质).*PC/i], ['热转印', /印花工艺.*热转印/] ];
   for (const [claim, evidence] of claims) {
     if (!text.toLowerCase().includes(claim.toLowerCase())) continue;
+    // A documented molding process is not a claim that the case material is silicone.
+    if (claim === '硅胶' && text.includes('硅胶成型') && !text.replaceAll('硅胶成型', '').includes('硅胶') &&
+      products.every(p => (p.attributes || []).some(a => /工艺/.test(a.name) && a.value.split('/').includes('硅胶成型')))) continue;
     const supported = products.every(p => (p.attributes || []).some(a =>
       evidence.test(`${a.name}=${a.value}`) && !/^(否|无|不带|no)$/i.test(a.value)));
     if (!supported) throw new AppError(CODES.TITLE_REJECTED, `关联商品未证实“${claim}”，请删除或重新生成`);

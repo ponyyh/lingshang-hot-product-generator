@@ -100,3 +100,12 @@ test('health and routing remain available',async t=>{
  assert.equal((await f.request('/api/unknown')).status,404);assert.equal((await f.request('/api/products',{})).status,405);
  assert.equal((await fetch(f.base+'/api/products',{method:'OPTIONS'})).status,204);
 });
+
+
+test('documented silicone molding is a process, while unsupported silicone material remains blocked',()=>{
+ const single=getProductsByIds([1]).products;
+ assert.equal(validatePrefix('TPU糖果色手机壳UV打印注塑硅胶成型',single),'TPU糖果色手机壳UV打印注塑硅胶成型');
+ assert.throws(()=>validatePrefix('液态硅胶手机壳保护套',single));
+ assert.throws(()=>validatePrefix('硅胶成型液态硅胶手机壳',single));
+ assert.throws(()=>validatePrefix('硅胶成型手机壳保护套',getProductsByIds([2]).products));
+});

@@ -12,6 +12,11 @@ const zlib = require("node:zlib");
 const MAX_BYTES = 256 * 1024;
 // 亚马逊商品页约 1MB，标题、五点描述等信息在几十万字节之后，需要读得更多
 const AMAZON_MAX_BYTES = 1536 * 1024;
+// 经商品数据服务拿到的页面更大（实测 1.3 到 3.2MB，卖点在 100 万字节附近）
+const SCRAPER_MAX_BYTES = 4 * 1024 * 1024;
+// 读到卖点区块后再多读这么多字节就停，不必等整页传完
+const AMAZON_TAIL_BYTES = 16 * 1024;
+const AMAZON_BULLETS_MARKER = Buffer.from('id="feature-bullets"');
 const MAX_REDIRECTS = 3;
 const USER_AGENT =
   "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/130.0.0.0 Safari/537.36";
@@ -86,59 +91,62 @@ const BROWSER_HEADERS = {
   "sec-ch-ua-platform": '"macOS"'
 };
 
-// 解压响应体；读取被截断时也尽量解出已收到的部分
-function decompress(body, encoding) {
-  const options = { finishFlush: zlib.constants.Z_SYNC_FLUSH, maxOutputLength: 8 * 1024 * 1024 };
-  try {
-    if (/\bgzip\b/i.test(encoding)) return zlib.gunzipSync(body, options);
-    if (/\bdeflate\b/i.test(encoding)) return zlib.inflateSync(body, options);
-    if (/\bbr\b/i.test(encoding)) {
-      return zlib.brotliDecompressSync(body, {
-        finishFlush: zlib.constants.BROTLI_OPERATION_FLUSH,
-        maxOutputLength: 8 * 1024 * 1024
-      });
-    }
-  } catch {
-    return Buffer.alloc(0);
-  }
-  return body;
+// 按响应的压缩方式返回一个解压流；未压缩时返回 null
+function createDecompressor(encoding) {
+  if (/\bgzip\b/i.test(encoding)) return zlib.createGunzip();
+  if (/\bdeflate\b/i.test(encoding)) return zlib.createInflate();
+  if (/\bbr\b/i.test(encoding)) return zlib.createBrotliDecompress();
+  return null;
 }
 
-function requestOnce(url, deadlineMs, maxBytes = MAX_BYTES) {
+// stopAfter：{ marker, tail }，在解压后的内容里读到 marker 后再读 tail 字节就结束，不等整页传完
+function requestOnce(url, deadlineMs, maxBytes = MAX_BYTES, stopAfter = null) {
+  return performRequest(url, deadlineMs, maxBytes, stopAfter, guardedLookup);
+}
+
+// 不校验目标地址，只给测试用
+function requestOnceUnsafe(url, deadlineMs, maxBytes, stopAfter) {
+  return performRequest(url, deadlineMs, maxBytes, stopAfter, undefined);
+}
+
+function performRequest(url, deadlineMs, maxBytes, stopAfter, lookup) {
   return new Promise((resolve, reject) => {
     const remaining = deadlineMs - Date.now();
     if (remaining <= 0) return reject(new Error("抓取超时"));
     const client = url.protocol === "https:" ? https : http;
-    const req = client.request(
-      url,
-      {
-        method: "GET",
-        lookup: guardedLookup,
-        headers: BROWSER_HEADERS
-      },
-      (res) => {
-        const chunks = [];
-        let size = 0;
-        const finish = () => {
-          clearTimeout(timer);
-          resolve({
-            status: res.statusCode || 0,
-            headers: res.headers,
-            body: decompress(Buffer.concat(chunks), String(res.headers["content-encoding"] || ""))
-          });
-        };
-        res.on("data", (chunk) => {
-          size += chunk.length;
-          chunks.push(chunk);
-          if (size >= maxBytes) {
-            res.destroy();
-            finish();
-          }
-        });
-        res.on("end", finish);
-        res.on("error", () => finish());
-      }
-    );
+    const req = client.request(url, { method: "GET", lookup, headers: BROWSER_HEADERS }, (res) => {
+      // 压缩传输、边解压边读：跨境带宽有限时，比下载未压缩的整页快得多
+      const decompressor = createDecompressor(String(res.headers["content-encoding"] || ""));
+      const stream = decompressor ? res.pipe(decompressor) : res;
+      const chunks = [];
+      let size = 0;
+      let stopAt = 0;
+      let carry = Buffer.alloc(0);
+      let done = false;
+      const finish = () => {
+        if (done) return;
+        done = true;
+        clearTimeout(timer);
+        res.destroy();
+        resolve({ status: res.statusCode || 0, headers: res.headers, body: Buffer.concat(chunks) });
+      };
+      stream.on("data", (chunk) => {
+        if (done) return;
+        size += chunk.length;
+        chunks.push(chunk);
+        if (stopAfter && !stopAt) {
+          // 标记可能跨两个数据块，所以带上前一块的末尾一起找
+          const window = Buffer.concat([carry, chunk]);
+          if (window.includes(stopAfter.marker)) stopAt = size + stopAfter.tail;
+          carry = window.subarray(Math.max(0, window.length - stopAfter.marker.length));
+        }
+        if (size >= maxBytes || (stopAt && size >= stopAt)) finish();
+      });
+      stream.on("end", finish);
+      // 连接中断或压缩流不完整时，用已经读到的部分
+      stream.on("error", finish);
+      res.on("error", finish);
+    });
     const timer = setTimeout(() => req.destroy(new Error("抓取超时")), remaining);
     req.on("error", (err) => {
       clearTimeout(timer);
@@ -306,12 +314,17 @@ const directBlockedUntil = new Map();
 async function fetchViaScraper(target, scraper, deadlineLimitMs, requestImpl) {
   const api = new URL(scraper.baseUrl);
   api.searchParams.set("api_key", scraper.apiKey);
+  // 美国站指定美国出口，返回的才是美国站的内容和语言
+  if (/(^|\.)amazon\.com$/i.test(target.hostname)) api.searchParams.set("country_code", "us");
   api.searchParams.set("url", target.href);
   const deadlineMs = Math.min(Date.now() + scraper.timeoutMs, deadlineLimitMs || Infinity);
   let res;
   try {
     assertAllowedUrl(api);
-    res = await requestImpl(api, deadlineMs, AMAZON_MAX_BYTES);
+    res = await requestImpl(api, deadlineMs, SCRAPER_MAX_BYTES, {
+      marker: AMAZON_BULLETS_MARKER,
+      tail: AMAZON_TAIL_BYTES
+    });
   } catch (err) {
     console.warn(`[link] 商品数据服务请求失败 target=${target.hostname} reason=${err.code || err.message}`);
     return {
@@ -355,8 +368,17 @@ async function fetchLinkInfo(
       const canUseScraper = amazon && Boolean(scraper?.apiKey);
       const skipDirect =
         canUseScraper && (scraper.always || (directBlockedUntil.get(url.hostname) || 0) > Date.now());
-      let res = skipDirect ? null : await requestImpl(url, deadlineMs, amazon ? AMAZON_MAX_BYTES : MAX_BYTES);
-      if (res && amazon && isAmazonBlocked(res)) {
+      let res = null;
+      if (!skipDirect) {
+        try {
+          res = await requestImpl(url, deadlineMs, amazon ? AMAZON_MAX_BYTES : MAX_BYTES);
+        } catch (err) {
+          // 服务器连不上这个亚马逊站点（如网络不通、超时）时，有商品数据服务就改走它
+          if (!canUseScraper) throw err;
+          console.warn(`[link] 亚马逊直连失败 host=${url.hostname} reason=${err.code || err.message}`);
+        }
+      }
+      if (amazon && (!res || isAmazonBlocked(res))) {
         directBlockedUntil.set(url.hostname, Date.now() + DIRECT_BLOCK_MEMO_MS);
       }
       if (canUseScraper && (!res || isAmazonBlocked(res))) {
@@ -434,8 +456,22 @@ async function fetchLinkInfo(
   }
 }
 
+// 缓存用的键：亚马逊商品链接统一成 站点 + 商品编号，其他链接用原文
+function linkCacheKey(hotLink) {
+  try {
+    const url = new URL(hotLink);
+    const asin = isAmazonHost(url.hostname) ? extractAsin(url) : "";
+    return asin ? `amazon:${url.hostname.replace(/^www\./i, "").toLowerCase()}:${asin}` : hotLink;
+  } catch {
+    return hotLink;
+  }
+}
+
 module.exports = {
   fetchLinkInfo,
+  linkCacheKey,
+  // 仅供测试直接验证底层读取行为；它不做地址安全校验，业务代码不要使用
+  requestForTest: requestOnceUnsafe,
   parseHtml,
   parseAmazonHtml,
   extractAsin,

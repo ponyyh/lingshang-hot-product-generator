@@ -264,6 +264,10 @@ function bindEvents() {
 
     dom.recognizeBtn.disabled = true;
     dom.recognizeBtn.querySelector(".btn-text").textContent = "识别中...";
+    // 亚马逊等链接读取较慢，超过 5 秒时告诉用户还在进行
+    const slowTimer = setTimeout(() => {
+      showToast("正在读取链接里的商品信息，最长约需 1 分钟，请稍候", "info", 8000);
+    }, 5000);
 
     try {
       const res = await API.recognizeHotProduct({
@@ -292,6 +296,7 @@ function bindEvents() {
     } catch (err) {
       showToast(err.message || "爆款链接识别失败，请稍后重试", "error");
     } finally {
+      clearTimeout(slowTimer);
       dom.recognizeBtn.disabled = false;
       dom.recognizeBtn.querySelector(".btn-text").textContent = "识别";
     }

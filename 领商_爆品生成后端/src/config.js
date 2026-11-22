@@ -41,11 +41,12 @@ function loadConfig(env = process.env) {
     scraper: {
       apiKey: String(env.SCRAPER_API_KEY || ""),
       baseUrl: String(env.SCRAPER_API_URL || "https://api.scraperapi.com/"),
-      timeoutMs: int(env.SCRAPER_TIMEOUT_MS, 20000),
+      // 实测一次读取 5 到 50 秒不等，多数在 20 秒内
+      timeoutMs: int(env.SCRAPER_TIMEOUT_MS, 40000),
       always: bool(env.SCRAPER_ALWAYS, false)
     },
-    // 走商品数据服务时一次读取可能要十几秒，所以总预算比前端 30 秒超时略短
-    agentBudgetMs: int(env.AGENT_BUDGET_MS, 27000),
+    // 走商品数据服务时一次读取可能要几十秒，所以总预算比前端 60 秒超时略短
+    agentBudgetMs: int(env.AGENT_BUDGET_MS, 50000),
     llmTimeoutMs: int(env.LLM_TIMEOUT_MS, 10000),
     // 亚马逊商品页约 1MB，实测读取要 2 到 3 秒，留出余量
     linkFetchTimeoutMs: int(env.LINK_FETCH_TIMEOUT_MS, 6000)

@@ -292,6 +292,7 @@ test("亚马逊：商品卖点和规格进入提示词，并要求用中文提�
   assert.match(prompt, /1\. Scratch-resistant coating/);
   assert.match(prompt, /2\. Built-in magnets for MagSafe/);
   assert.match(prompt, /用中文表达/);
+  assert.match(prompt, /机型只能来自【关联商品】/);
 
   const calls = [];
   const s = await start({ fetchImpl: modelFetch([GOOD], calls), linkFetcher: async () => linkInfo });
@@ -334,6 +335,7 @@ test("商品数据服务：直连被拦截时改走它，目标地址是统一�
   assert.equal(seen[1].hostname, "api.scraperapi.com");
   assert.equal(seen[1].searchParams.get("url"), "https://www.amazon.ca/dp/B0CHX3QBCH");
   assert.equal(seen[1].searchParams.get("api_key"), "test-scraper-key");
+  assert.equal(seen[1].searchParams.get("country_code"), null);
   // 密钥不能出现在返回给前端的信息里
   assert.ok(!JSON.stringify(info).includes("test-scraper-key"));
 
@@ -409,12 +411,127 @@ test("商品数据服务：接口把配置和剩余时间传给读取层；健�
   const r = await s.call("POST", "/api/agent/hot-product/recognize", { token, body: { productIds: [3], hotLink: "https://www.amazon.com/dp/B0CHX3QBCH" } });
   assert.equal(r.json.data.extractedInfo.source, "scraper");
   assert.equal(received.scraper.apiKey, "test-scraper-key");
-  // 留给商品数据服务的截止时间 = 总预算 27 秒 - 给模型预留的 5 秒
-  assert.ok(received.scraperDeadlineMs - before > 20000 && received.scraperDeadlineMs - before <= 22500);
+  // 留给商品数据服务的截止时间 = 总预算 50 秒 - 给模型预留的 5 秒
+  assert.ok(received.scraperDeadlineMs - before > 43000 && received.scraperDeadlineMs - before <= 45500);
   assert.ok(!JSON.stringify(r.json).includes("test-scraper-key"));
   await s.close();
 
   const off = await start();
   assert.equal((await off.call("GET", "/api/health")).json.data.amazonDataServiceConfigured, false);
   await off.close();
+});
+
+test("商品数据服务：服务器直连亚马逊站点失败时也改走它；未配置时保持原来的失败提示", async () => {
+  const down = Object.assign(new Error("connect ECONNRESET"), { code: "ECONNRESET" });
+  const seen = [];
+  let info = await fetchLinkInfo("https://www.amazon.co.jp/dp/B0CHX3QBCH", {
+    scraper: SCRAPER,
+    requestImpl: fakeRequest({ "www.amazon.co.jp": down, "api.scraperapi.com": page(200) }, seen)
+  });
+  assert.equal(info.fetched, true);
+  assert.equal(info.source, "scraper");
+  assert.deepEqual(seen.map((u) => u.hostname), ["www.amazon.co.jp", "api.scraperapi.com"]);
+  assert.equal(seen[1].searchParams.get("country_code"), null);
+
+  info = await fetchLinkInfo("https://www.amazon.com.br/dp/B0CHX3QBCH", {
+    scraper: { ...SCRAPER, apiKey: "" },
+    requestImpl: fakeRequest({ "www.amazon.com.br": down })
+  });
+  assert.equal(info.fetched, false);
+  assert.equal(info.note, "未能读取链接内容：网络连接失败");
+});
+
+test("商品数据服务：美国站带 country_code=us；同一商品的不同链接写法共用缓存，不重复读取", async () => {
+  const { linkCacheKey } = require("../src/linkInfo");
+  assert.equal(linkCacheKey("https://www.amazon.com/Some-Title/dp/b0chx3qbch/ref=sr_1_1?tag=x"), "amazon:amazon.com:B0CHX3QBCH");
+  assert.equal(linkCacheKey("https://amazon.com/gp/product/B0CHX3QBCH?th=1"), "amazon:amazon.com:B0CHX3QBCH");
+  assert.notEqual(linkCacheKey("https://www.amazon.co.uk/dp/B0CHX3QBCH"), linkCacheKey("https://www.amazon.com/dp/B0CHX3QBCH"));
+  assert.equal(linkCacheKey("https://shop.example.com/item?id=1"), "https://shop.example.com/item?id=1");
+  assert.equal(linkCacheKey("not a url"), "not a url");
+
+  const seen = [];
+  const us = await fetchLinkInfo("https://www.amazon.com/dp/B0CHX3QBCH", {
+    scraper: { ...SCRAPER, always: true },
+    requestImpl: fakeRequest({ "api.scraperapi.com": page(200) }, seen)
+  });
+  assert.equal(us.fetched, true);
+  assert.equal(seen[0].searchParams.get("country_code"), "us");
+  // url 参数必须排在最后，避免和目标链接自带的参数混淆
+  assert.equal([...seen[0].searchParams.keys()].pop(), "url");
+
+  let reads = 0;
+  const s = await start({
+    env: { SCRAPER_API_KEY: "test-scraper-key" },
+    linkFetcher: async (link) => {
+      reads += 1;
+      return { sourceUrl: link, host: "www.amazon.com", platform: "亚马逊", fetched: true, source: "scraper", pageTitle: "Case", description: "", keywords: "", note: "", bullets: ["A"], attributes: [] };
+    }
+  });
+  const token = await s.login();
+  const body = (hotLink) => ({ token, body: { productIds: [3], hotLink } });
+  await s.call("POST", "/api/agent/hot-product/recognize", body("https://www.amazon.com/dp/B0CHX3QBCH"));
+  await s.call("POST", "/api/agent/hot-product/recognize", body("https://www.amazon.com/Long-Title/dp/B0CHX3QBCH/ref=sr_1_1?keywords=case"));
+  await s.call("POST", "/api/agent/hot-product/regenerate-title", { token, body: { productIds: [3], hotLink: "https://www.amazon.com/gp/product/B0CHX3QBCH", previousTitle: "旧标题" } });
+  assert.equal(reads, 1);
+  await s.call("POST", "/api/agent/hot-product/recognize", body("https://www.amazon.com/dp/B0DCZ4WZQ1"));
+  assert.equal(reads, 2);
+  await s.close();
+});
+
+test("读取层：未压缩的响应读到卖点区块后提前结束，不等整页传完", async () => {
+  const head = Buffer.from(fs.readFileSync(path.join(__dirname, "fixtures/amazon-product.html")));
+  const filler = Buffer.alloc(64 * 1024, "x");
+  let sent = 0;
+  const server = http.createServer((req, res) => {
+    res.writeHead(200, { "Content-Type": "text/html; charset=utf-8" });
+    res.write(head);
+    sent = head.length;
+    // 之后持续发送无关内容；读取层应当在卖点之后不久就断开
+    const timer = setInterval(() => { sent += filler.length; if (!res.write(filler)) { /* 忽略背压 */ } }, 5);
+    res.on("close", () => clearInterval(timer));
+  });
+  await new Promise((r) => server.listen(0, "127.0.0.1", r));
+  server.unref();
+  const { requestForTest } = require("../src/linkInfo");
+  const started = Date.now();
+  const res = await requestForTest(new URL(`http://127.0.0.1:${server.address().port}/`), Date.now() + 4000, 8 * 1024 * 1024, {
+    marker: Buffer.from('id="feature-bullets"'),
+    tail: 16 * 1024
+  });
+  assert.ok(Date.now() - started < 2000);
+  assert.ok(res.body.length < head.length + 256 * 1024, `读了 ${res.body.length} 字节`);
+  assert.equal(parseAmazonHtml(res.body.toString("utf8")).bullets.length, 4);
+  server.closeAllConnections();
+  await new Promise((r) => server.close(r));
+});
+
+test("读取层：压缩传输的响应边解压边读，读到卖点区块后同样提前结束", async () => {
+  const zlib = require("node:zlib");
+  const crypto = require("node:crypto");
+  const head = fs.readFileSync(path.join(__dirname, "fixtures/amazon-product.html"));
+  const server = http.createServer((req, res) => {
+    assert.match(req.headers["accept-encoding"], /gzip/);
+    res.writeHead(200, { "Content-Type": "text/html; charset=utf-8", "Content-Encoding": "gzip" });
+    const gzip = zlib.createGzip();
+    gzip.pipe(res);
+    gzip.write(head);
+    gzip.flush();
+    // 之后持续发送压不动的随机内容
+    const timer = setInterval(() => { gzip.write(crypto.randomBytes(32 * 1024).toString("base64")); gzip.flush(); }, 5);
+    res.on("close", () => clearInterval(timer));
+  });
+  await new Promise((r) => server.listen(0, "127.0.0.1", r));
+  server.unref();
+  const { requestForTest } = require("../src/linkInfo");
+  const started = Date.now();
+  const res = await requestForTest(new URL(`http://127.0.0.1:${server.address().port}/`), Date.now() + 4000, 8 * 1024 * 1024, {
+    marker: Buffer.from('id="feature-bullets"'),
+    tail: 16 * 1024
+  });
+  assert.ok(Date.now() - started < 2000);
+  assert.ok(res.body.length < head.length + 256 * 1024, `读了 ${res.body.length} 字节`);
+  assert.equal(parseAmazonHtml(res.body.toString("utf8")).title, "Apple iPhone 15 Plus Clear Case with MagSafe");
+  assert.equal(parseAmazonHtml(res.body.toString("utf8")).bullets.length, 4);
+  server.closeAllConnections();
+  await new Promise((r) => server.close(r));
 });

@@ -12,7 +12,16 @@ npm test                    # 自动化测试（模型用假数据，不产生�
 BASE_URL=<地址> TEST_USER=<账号> TEST_PASS=<密码> node scripts/smoke.mjs   # 对运行中的服务做真实验收
 ```
 
-公网地址每次启动都会变，电脑休眠或关机后失效。要长期稳定的地址，把本目录部署到任意能跑 Node 的服务器即可，代码不用改。
+临时隧道的地址每次启动都会变，电脑休眠或关机后失效。
+
+## 线上部署（火山引擎函数服务）
+
+- **地址**：`https://sc9oc2u4b15chepfhoq43.apigateway-cn-guangzhou.volceapi.com`（页面和接口同一个地址）
+- **位置**：华南 1（广州），应用 `lingshang-hot-product`，API 网关 `lingshang-gw`（Serverless）
+- **规格**：0.25 核 / 512MB，实例数 0 到 2，没有请求时不占实例，所以闲置后第一次访问会慢一些
+- **重新部署**：`bash scripts/deploy-volc.sh`（只上传代码和前端页面，不上传 `.env`）
+- **环境变量**：线上单独保存，用 `vefaas env list` 查看、`vefaas env set KEY=VALUE` 修改，改完需要重新部署才生效
+- **访问限制**：这个域名在境外代理节点下可能连不上，需要直连或让代理对它走直连
 
 ## 接口协议
 

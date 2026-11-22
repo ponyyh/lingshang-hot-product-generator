@@ -66,7 +66,7 @@ http
     if (req.url === "/api" || req.url.startsWith("/api/") || req.url.startsWith("/api?")) api(req, res);
     else serveStatic(req, res);
   })
-  // 本地默认只监听本机；部署到云上时设置 HOST=0.0.0.0
-  .listen(port, process.env.HOST || "127.0.0.1", () => {
+  // 本地开发只监听本机；部署包（没有同级前端目录）里默认对外监听，云平台才能访问到
+  .listen(port, process.env.HOST || (fs.existsSync(SIBLING_FRONTEND) ? "127.0.0.1" : "0.0.0.0"), () => {
     console.log(`领商 · 爆品生成 已启动，端口 ${port}`);
   });
